@@ -18,10 +18,10 @@
       "bundleIdentifier": "com.flexpestcontrol.salescoach",
       "infoPlist": {
         "UIBackgroundModes": [
-          "audio",
           "audio"
         ],
         "NSMicrophoneUsageDescription": "Flex Sales Coach records your sales conversations for AI-powered coaching analysis.",
+        "NSLocationWhenInUseUsageDescription": "Flex Sales Coach uses your location to tag where each sales conversation happens.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
