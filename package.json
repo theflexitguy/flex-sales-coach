@@ -1,0 +1,14 @@
+{
+  "name": "flex-sales-coach",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @flex/web dev",
+    "build": "pnpm --filter @flex/web build",
+    "lint": "pnpm --filter @flex/web lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

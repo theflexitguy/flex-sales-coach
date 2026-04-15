@@ -1,0 +1,134 @@
+"use client";
+
+import { useState, useRef, useCallback } from "react";
+
+interface AudioRecorderProps {
+  onRecorded: (blob: Blob, durationSeconds: number) => void;
+  disabled?: boolean;
+}
+
+export function AudioRecorder({ onRecorded, disabled }: AudioRecorderProps) {
+  const [recording, setRecording] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef(0);
+
+  const start = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm",
+      });
+
+      chunksRef.current = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType });
+        const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+        onRecorded(blob, elapsed);
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      startTimeRef.current = Date.now();
+      mediaRecorder.start(1000);
+      setRecording(true);
+      setDuration(0);
+
+      timerRef.current = setInterval(() => {
+        setDuration(Math.round((Date.now() - startTimeRef.current) / 1000));
+      }, 500);
+    } catch {
+      // Permission denied or no mic
+    }
+  }, [onRecorded]);
+
+  const stop = useCallback(() => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setRecording(false);
+    setDuration(0);
+  }, []);
+
+  const formatTime = (s: number) =>
+    `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+
+  if (recording) {
+    return (
+      <button
+        type="button"
+        onClick={stop}
+        className="flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-1.5 text-xs font-semibold text-red-400 hover:bg-red-500/20 transition-colors"
+      >
+        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        {formatTime(duration)} — Tap to stop
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={start}
+      disabled={disabled}
+      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-50 transition-colors"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+      </svg>
+      Audio Note
+    </button>
+  );
+}
+
+interface AudioPlaybackProps {
+  url: string;
+  durationSeconds?: number;
+}
+
+export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const toggle = () => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio(url);
+      audioRef.current.onended = () => setPlaying(false);
+    }
+    if (playing) {
+      audioRef.current.pause();
+      setPlaying(false);
+    } else {
+      audioRef.current.play();
+      setPlaying(true);
+    }
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      className="flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1 text-xs text-sky-400 hover:bg-sky-500/20 transition-colors"
+    >
+      {playing ? (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+      ) : (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+      )}
+      {durationSeconds ? `${durationSeconds}s` : "Play"}
+    </button>
+  );
+}
