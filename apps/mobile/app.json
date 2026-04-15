@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Flex Sales Coach",
+    "slug": "flex-sales-coach",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "flex-sales-coach",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#09090b"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.flexpestcontrol.salescoach",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"],
+        "NSMicrophoneUsageDescription": "Flex Sales Coach records your sales conversations for AI-powered coaching analysis."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#09090b"
+      },
+      "package": "com.flexpestcontrol.salescoach",
+      "permissions": ["RECORD_AUDIO", "FOREGROUND_SERVICE"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Flex Sales Coach needs microphone access to record sales conversations for coaching."
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
