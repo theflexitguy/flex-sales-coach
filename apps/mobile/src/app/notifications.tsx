@@ -1,8 +1,7 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useNotifications } from "../hooks/useNotifications";
-import { SkeletonList } from "../components/ui/skeleton";
 
 const TYPE_ICONS: Record<string, string> = {
   help_request_new: "chatbubbles",
@@ -14,11 +13,33 @@ const TYPE_ICONS: Record<string, string> = {
 };
 
 export default function NotificationsScreen() {
-  const { notifications, unreadCount, refresh, markAllRead } = useNotifications();
+  const { notifications, unreadCount, refresh, markAllRead, clearAll } = useNotifications();
   const router = useRouter();
 
   return (
     <>
+      {notifications.length > 0 && (
+        <View style={styles.headerActions}>
+          {unreadCount > 0 && (
+            <TouchableOpacity style={styles.headerButton} onPress={markAllRead}>
+              <Ionicons name="checkmark-done" size={16} color="#35b2ff" />
+              <Text style={styles.headerButtonText}>Mark all read</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => {
+              Alert.alert("Clear All", "Remove all notifications?", [
+                { text: "Cancel", style: "cancel" },
+                { text: "Clear", style: "destructive", onPress: clearAll },
+              ]);
+            }}
+          >
+            <Ionicons name="trash-outline" size={16} color="#71717a" />
+            <Text style={[styles.headerButtonText, { color: "#71717a" }]}>Clear all</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <FlatList
         style={styles.container}
         data={notifications}
@@ -69,6 +90,9 @@ const styles = StyleSheet.create({
   emptyContainer: { flex: 1 },
   empty: { flex: 1, justifyContent: "center", alignItems: "center", gap: 8 },
   emptyTitle: { color: "#a1a1aa", fontSize: 16 },
+  headerActions: { flexDirection: "row", justifyContent: "flex-end", gap: 16, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: "#09090b", borderBottomWidth: 1, borderBottomColor: "#1a1a1e" },
+  headerButton: { flexDirection: "row", alignItems: "center", gap: 4 },
+  headerButtonText: { color: "#35b2ff", fontSize: 13, fontWeight: "500" },
   card: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#1a1a1e" },
   cardUnread: { backgroundColor: "rgba(53,178,255,0.03)" },
   iconCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#18181b", justifyContent: "center", alignItems: "center" },

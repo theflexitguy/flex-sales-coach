@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { apiGet, apiPost } from "../services/api";
+import { apiGet, apiPost, apiPatch } from "../services/api";
 
 interface Notification {
   id: string;
@@ -31,11 +31,19 @@ export function useNotifications() {
 
   const markAllRead = useCallback(async () => {
     try {
-      await apiPost("/api/notifications", { markAllRead: true });
+      await apiPatch("/api/notifications", { markAllRead: true });
       setUnreadCount(0);
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch { /* ignore */ }
   }, []);
 
-  return { notifications, unreadCount, refresh: fetch_, markAllRead };
+  const clearAll = useCallback(async () => {
+    try {
+      await apiPost("/api/notifications/clear", {});
+      setNotifications([]);
+      setUnreadCount(0);
+    } catch { /* ignore */ }
+  }, []);
+
+  return { notifications, unreadCount, refresh: fetch_, markAllRead, clearAll };
 }
