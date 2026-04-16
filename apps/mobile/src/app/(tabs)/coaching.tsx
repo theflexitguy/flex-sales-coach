@@ -1,10 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
+import { useCachedFetch } from "../../hooks/useCachedFetch";
 
 interface HelpRequestItem {
   id: string;
@@ -24,21 +24,14 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function CoachingScreen() {
-  const [requests, setRequests] = useState<HelpRequestItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  const fetch_ = useCallback(async () => {
-    try {
-      const data = await apiGet<{ requests: HelpRequestItem[] }>("/api/mobile/help-requests");
-      setRequests(data.requests);
-    } catch { /* ignore */ }
-  }, []);
+  const { data, loading, refreshing, refresh } = useCachedFetch(
+    "coaching-requests",
+    () => apiGet<{ requests: HelpRequestItem[] }>("/api/mobile/help-requests")
+  );
 
-  useEffect(() => { fetch_().then(() => setLoading(false)); }, []);
-
-  const onRefresh = async () => { setRefreshing(true); await fetch_(); setRefreshing(false); };
+  const requests = data?.requests ?? [];
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color="#35b2ff" /></View>;
@@ -50,7 +43,7 @@ export default function CoachingScreen() {
       contentContainerStyle={requests.length === 0 ? styles.emptyContainer : undefined}
       data={requests}
       keyExtractor={(item) => item.id}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#35b2ff" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#35b2ff" />}
       ListEmptyComponent={
         <View style={styles.empty}>
           <Ionicons name="chatbubbles-outline" size={48} color="#3f3f46" />

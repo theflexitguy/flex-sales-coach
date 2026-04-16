@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
 import { SkeletonList } from "../ui/skeleton";
+import { useCachedFetch } from "../../hooks/useCachedFetch";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e", good: "#35b2ff", acceptable: "#eab308",
@@ -18,25 +18,12 @@ interface DashboardData {
 }
 
 export function ManagerDashboardView() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  const [error, setError] = useState(false);
-
-  async function fetchData() {
-    setError(false);
-    try {
-      const d = await apiGet<DashboardData>("/api/dashboard");
-      setData(d);
-    } catch {
-      setError(true);
-    }
-    setLoading(false);
-  }
-
-  useEffect(() => { fetchData(); }, []);
+  const { data, loading, refreshing, error, refresh } = useCachedFetch(
+    "manager-dashboard",
+    () => apiGet<DashboardData>("/api/dashboard")
+  );
 
   if (loading) return <SkeletonList count={6} />;
   if (error || !data) {
@@ -46,7 +33,7 @@ export function ManagerDashboardView() {
         <Text style={{ color: "#a1a1aa", fontSize: 15, textAlign: "center" }}>
           {error ? "Couldn't load dashboard" : "No data yet"}
         </Text>
-        <TouchableOpacity onPress={() => { setLoading(true); fetchData(); }}
+        <TouchableOpacity onPress={refresh}
           style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, backgroundColor: "rgba(53,178,255,0.1)" }}>
           <Ionicons name="refresh" size={16} color="#35b2ff" />
           <Text style={{ color: "#35b2ff", fontSize: 14, fontWeight: "600" }}>Retry</Text>
@@ -57,7 +44,7 @@ export function ManagerDashboardView() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await fetchData(); setRefreshing(false); }} tintColor="#35b2ff" />}>
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#35b2ff" />}>
 
       {/* Today */}
       <View style={styles.statsRow}>

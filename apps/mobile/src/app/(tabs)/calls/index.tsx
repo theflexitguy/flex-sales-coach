@@ -1,4 +1,3 @@
-import { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,6 +10,7 @@ import {
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../../services/api";
+import { useCachedFetch } from "../../../hooks/useCachedFetch";
 
 interface CallItem {
   id: string;
@@ -32,29 +32,14 @@ const GRADE_COLORS: Record<string, string> = {
 };
 
 export default function CallsListScreen() {
-  const [calls, setCalls] = useState<CallItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  const fetchCalls = useCallback(async () => {
-    try {
-      const data = await apiGet<{ calls: CallItem[] }>("/api/mobile/calls?limit=50");
-      setCalls(data.calls);
-    } catch {
-      // silently fail
-    }
-  }, []);
+  const { data, loading, refreshing, refresh } = useCachedFetch(
+    "calls-list",
+    () => apiGet<{ calls: CallItem[] }>("/api/mobile/calls?limit=50")
+  );
 
-  useEffect(() => {
-    fetchCalls().then(() => setLoading(false));
-  }, []);
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await fetchCalls();
-    setRefreshing(false);
-  };
+  const calls = data?.calls ?? [];
 
   function formatDuration(s: number) {
     const m = Math.floor(s / 60);
@@ -89,7 +74,7 @@ export default function CallsListScreen() {
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
-          onRefresh={onRefresh}
+          onRefresh={refresh}
           tintColor="#35b2ff"
         />
       }

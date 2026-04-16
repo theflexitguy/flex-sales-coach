@@ -1,4 +1,3 @@
-import { useState, useEffect, useCallback } from "react";
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator,
@@ -6,6 +5,7 @@ import {
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
+import { useCachedFetch } from "../../hooks/useCachedFetch";
 
 const DIFFICULTY_COLORS: Record<string, string> = {
   beginner: "#22c55e",
@@ -48,19 +48,12 @@ interface ScenariosResponse {
 }
 
 export function ScenarioBrowser() {
-  const [data, setData] = useState<ScenariosResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  const fetchData = useCallback(async () => {
-    const result = await apiGet<ScenariosResponse>("/api/mobile/roleplay/scenarios");
-    setData(result);
-    setLoading(false);
-    setRefreshing(false);
-  }, []);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, refreshing, refresh } = useCachedFetch(
+    "roleplay-scenarios",
+    () => apiGet<ScenariosResponse>("/api/mobile/roleplay/scenarios")
+  );
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color="#35b2ff" /></View>;
@@ -76,7 +69,7 @@ export function ScenarioBrowser() {
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
-          onRefresh={() => { setRefreshing(true); fetchData(); }}
+          onRefresh={refresh}
           tintColor="#35b2ff"
         />
       }

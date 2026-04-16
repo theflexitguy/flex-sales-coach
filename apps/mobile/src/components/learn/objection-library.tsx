@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
+import { useCachedFetch } from "../../hooks/useCachedFetch";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e", good: "#35b2ff", acceptable: "#eab308",
@@ -29,26 +30,21 @@ interface ObjectionItem {
 }
 
 export function ObjectionLibrary() {
-  const [objections, setObjections] = useState<ObjectionItem[]>([]);
-  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showExamples, setShowExamples] = useState<string | null>(null);
   const [examples, setExamples] = useState<ObjectionItem[]>([]);
   const router = useRouter();
 
-  const fetchData = useCallback(async () => {
-    const params = activeCategory ? `?category=${activeCategory}` : "";
-    const data = await apiGet<{
-      objections: ObjectionItem[];
-      categoryCounts: Record<string, number>;
-    }>(`/api/mobile/objections/library${params}`);
-    setObjections(data.objections);
-    setCategoryCounts(data.categoryCounts);
-    setLoading(false);
-  }, [activeCategory]);
+  const params = activeCategory ? `?category=${activeCategory}` : "";
+  const { data, loading } = useCachedFetch(
+    `objections-${activeCategory ?? "all"}`,
+    () => apiGet<{ objections: ObjectionItem[]; categoryCounts: Record<string, number> }>(
+      `/api/mobile/objections/library${params}`
+    )
+  );
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const objections = data?.objections ?? [];
+  const categoryCounts = data?.categoryCounts ?? {};
 
   async function loadExamples(category: string) {
     setShowExamples(category);

@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
+import { useCachedFetch } from "../../hooks/useCachedFetch";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e", good: "#35b2ff", acceptable: "#eab308",
@@ -20,15 +20,10 @@ interface StatsData {
 }
 
 export function RepStatsView() {
-  const [stats, setStats] = useState<StatsData | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    apiGet<StatsData>("/api/mobile/stats")
-      .then(setStats)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const { data: stats, loading } = useCachedFetch(
+    "rep-stats",
+    () => apiGet<StatsData>("/api/mobile/stats")
+  );
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color="#35b2ff" /></View>;
