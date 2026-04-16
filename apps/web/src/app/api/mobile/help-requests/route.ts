@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { getVisibleRepIds } from "@/lib/assignments";
 
 export async function GET(request: Request) {
   const auth = await requireApiAuth(request);
@@ -17,10 +18,11 @@ export async function GET(request: Request) {
     .order("created_at", { ascending: false })
     .limit(30);
 
-  // Reps see own, managers see team
+  // Reps see own, managers see assigned + unassigned reps
   const isManager = auth.profile?.role === "manager";
-  if (isManager) {
-    query = query.eq("team_id", auth.profile?.team_id);
+  if (isManager && auth.profile?.team_id) {
+    const visibleRepIds = await getVisibleRepIds(auth.user.id, auth.profile.team_id);
+    query = query.in("rep_id", visibleRepIds);
   } else {
     query = query.eq("rep_id", auth.user.id);
   }
@@ -74,17 +76,33 @@ export async function POST(request: Request) {
 
   const admin = createAdmin();
 
-  // Get team manager
+  // Get rep's team and assigned manager(s)
   const { data: profile } = await admin.from("profiles").select("team_id").eq("id", auth.user.id).single();
   if (!profile?.team_id) return NextResponse.json({ error: "Not on a team" }, { status: 400 });
 
-  const { data: team } = await admin.from("teams").select("manager_id").eq("id", profile.team_id).single();
-  if (!team?.manager_id) return NextResponse.json({ error: "No manager found" }, { status: 400 });
+  // Check if rep has assigned managers
+  const { data: assignments } = await admin
+    .from("manager_rep_assignments")
+    .select("manager_id")
+    .eq("rep_id", auth.user.id)
+    .eq("team_id", profile.team_id);
+
+  let targetManagerId: string;
+
+  if (assignments && assignments.length > 0) {
+    // Route to first assigned manager (rep can have multiple, pick primary)
+    targetManagerId = assignments[0].manager_id;
+  } else {
+    // Fallback: route to team manager
+    const { data: team } = await admin.from("teams").select("manager_id").eq("id", profile.team_id).single();
+    if (!team?.manager_id) return NextResponse.json({ error: "No manager found" }, { status: 400 });
+    targetManagerId = team.manager_id;
+  }
 
   const { data: req, error } = await admin.from("help_requests").insert({
     call_id: callId,
     rep_id: auth.user.id,
-    manager_id: team.manager_id,
+    manager_id: targetManagerId,
     team_id: profile.team_id,
     transcript_excerpt: transcriptExcerpt,
     start_ms: startMs,

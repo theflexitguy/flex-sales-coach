@@ -2,21 +2,25 @@ import { requireManager } from "@/lib/auth";
 import { createServer } from "@/lib/supabase-server";
 import Link from "next/link";
 import { GRADE_COLORS } from "@flex/shared";
+import { getVisibleRepIds } from "@/lib/assignments";
 
 export default async function RepsPage() {
   const manager = await requireManager();
   const supabase = await createServer();
 
-  // Get team members
-  const { data: reps } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("team_id", manager.teamId)
-    .eq("role", "rep")
-    .eq("is_active", true)
-    .order("full_name") as unknown as {
-      data: Array<{ id: string; full_name: string; email: string; team_id: string }> | null;
-    };
+  // Get visible reps (assigned + unassigned)
+  const visibleRepIds = await getVisibleRepIds(manager.id, manager.teamId);
+
+  const { data: reps } = visibleRepIds.length > 0
+    ? await supabase
+        .from("profiles")
+        .select("*")
+        .in("id", visibleRepIds)
+        .eq("is_active", true)
+        .order("full_name") as unknown as {
+          data: Array<{ id: string; full_name: string; email: string; team_id: string }> | null;
+        }
+    : { data: [] as Array<{ id: string; full_name: string; email: string; team_id: string }> };
 
   // Get call stats per rep
   const repStats = await Promise.all(

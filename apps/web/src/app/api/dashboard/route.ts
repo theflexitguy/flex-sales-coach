@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
+import { getVisibleRepIds } from "@/lib/assignments";
 
 export async function GET(request: Request) {
   const auth = await requireApiAuth(request);
@@ -31,12 +32,24 @@ export async function GET(request: Request) {
     supabase.from("profiles").select("id, full_name, role").eq("is_active", true),
   ]);
 
-  const repMap: Record<string, string> = {};
-  for (const r of reps ?? []) repMap[r.id] = r.full_name;
+  // Filter to visible reps if manager
+  const isManager = auth.profile?.role === "manager";
+  let visibleRepIds: string[] | null = null;
+  if (isManager && auth.profile?.team_id) {
+    visibleRepIds = await getVisibleRepIds(auth.user.id, auth.profile.team_id);
+  }
 
-  // Leaderboard
+  const repMap: Record<string, string> = {};
+  for (const r of reps ?? []) {
+    if (!visibleRepIds || visibleRepIds.includes(r.id) || r.role === "manager") {
+      repMap[r.id] = r.full_name;
+    }
+  }
+
+  // Leaderboard — scoped to visible reps
   const repScores: Record<string, { scores: number[]; objections: number; handled: number; calls: number }> = {};
   for (const stat of dailyStats ?? []) {
+    if (visibleRepIds && !visibleRepIds.includes(stat.rep_id)) continue;
     if (!repScores[stat.rep_id]) repScores[stat.rep_id] = { scores: [], objections: 0, handled: 0, calls: 0 };
     if (stat.avg_score != null) repScores[stat.rep_id].scores.push(stat.avg_score);
     repScores[stat.rep_id].objections += stat.total_objections;
@@ -88,7 +101,7 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     todayActivity: {
-      callsToday: (todayCalls ?? []).length,
+      callsToday: (todayCalls ?? []).filter((c: { rep_id: string }) => !visibleRepIds || visibleRepIds.includes(c.rep_id)).length,
       activeSessions: (activeSessions ?? []).length,
       analyzedToday: todayScores.length,
     },
