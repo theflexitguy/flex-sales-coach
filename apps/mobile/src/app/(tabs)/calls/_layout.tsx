@@ -11,7 +11,7 @@ export default function CallsLayout() {
         headerBackTitle: "Conversations",
       }}
     >
-      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="index" options={{ title: "Conversations" }} />
       <Stack.Screen name="[id]" options={{ title: "Conversation" }} />
     </Stack>
   );
