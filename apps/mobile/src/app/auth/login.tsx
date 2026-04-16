@@ -40,7 +40,7 @@ export default function LoginScreen() {
         <View style={styles.header}>
           <View style={styles.badge}>
             <View style={styles.dot} />
-            <Text style={styles.badgeText}>FLEX SALES COACH</Text>
+            <Text style={styles.badgeText}>KOACHR</Text>
           </View>
           <Text style={styles.title}>Welcome back</Text>
           <Text style={styles.subtitle}>Sign in to your account</Text>

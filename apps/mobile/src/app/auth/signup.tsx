@@ -53,7 +53,7 @@ export default function SignupScreen() {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <View style={styles.inner}>
         <View style={styles.header}>
-          <View style={styles.badge}><View style={styles.dot} /><Text style={styles.badgeText}>FLEX SALES COACH</Text></View>
+          <View style={styles.badge}><View style={styles.dot} /><Text style={styles.badgeText}>KOACHR</Text></View>
           <Text style={styles.title}>Create Account</Text>
           <Text style={styles.subtitle}>Join your team</Text>
         </View>

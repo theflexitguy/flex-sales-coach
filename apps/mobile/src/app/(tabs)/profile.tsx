@@ -35,7 +35,7 @@ export default function ProfileScreen() {
         <Text style={styles.signOutText}>Sign Out</Text>
       </TouchableOpacity>
 
-      <Text style={styles.version}>Flex Sales Coach v1.0.0</Text>
+      <Text style={styles.version}>koachr v1.0.0</Text>
     </View>
   );
 }
