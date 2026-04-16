@@ -12,13 +12,14 @@ export async function POST(request: Request) {
   if (!audioFile) return NextResponse.json({ error: "No audio file" }, { status: 400 });
 
   const admin = createAdmin();
-  const storagePath = `${auth.user.id}/${randomUUID()}.webm`;
+  const ext = audioFile.type?.includes("mp4") ? "m4a" : "webm";
+  const storagePath = `${auth.user.id}/${randomUUID()}.${ext}`;
   const buffer = Buffer.from(await audioFile.arrayBuffer());
 
   const { error: uploadError } = await admin.storage
     .from("audio-notes")
     .upload(storagePath, buffer, {
-      contentType: audioFile.type || "audio/webm",
+      contentType: audioFile.type || "audio/mp4",
       upsert: false,
     });
 

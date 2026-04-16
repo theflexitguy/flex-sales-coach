@@ -98,6 +98,8 @@ interface CallDetail {
     timestampMs: number | null;
     createdAt: string;
     authorName: string;
+    audioUrl: string | null;
+    audioDurationSeconds: number | null;
   }>;
   helpRequests: Array<{
     id: string;
@@ -609,7 +611,8 @@ export default function CallDetailScreen() {
               <Text style={styles.noteAuthor}>{n.authorName}</Text>
               {n.timestampMs != null && <Text style={{ color: "#35b2ff", fontSize: 11, fontFamily: "monospace" }}>@ {formatMs(n.timestampMs)}</Text>}
             </View>
-            <Text style={styles.noteContent}>{n.content}</Text>
+            {n.content !== "Audio note" && <Text style={styles.noteContent}>{n.content}</Text>}
+            {n.audioUrl && <VoiceNotePlayer audioUrl={n.audioUrl} authorName={n.authorName} />}
           </View>
         ))}
       </View>

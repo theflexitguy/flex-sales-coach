@@ -137,6 +137,8 @@ export async function GET(
       timestampMs: n.timestamp_ms,
       createdAt: n.created_at,
       authorName: authorMap[n.author_id as string] ?? "Coach",
+      audioUrl: n.audio_url ?? null,
+      audioDurationSeconds: n.audio_duration_seconds ?? null,
     })),
     helpRequests: (helpRequests ?? []).map((h: Record<string, unknown>) => ({
       id: h.id,
