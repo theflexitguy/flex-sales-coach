@@ -1,24 +1,23 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { AudioModule, setAudioModeAsync } from "expo-audio";
 import type { AudioStatus } from "expo-audio";
 
 export function useAudioPlayer(audioUrl: string | null) {
-  const source = useMemo(
-    () => (audioUrl ? { uri: audioUrl } : null),
-    [audioUrl]
-  );
-
-  // Create player directly — pass 3 args to match Expo Go's native binary
-  const player = useMemo(() => {
-    // @ts-expect-error — native expects (source, updateInterval, keepAudioSessionActive)
-    return new AudioModule.AudioPlayer(source, 250, false) as InstanceType<typeof AudioModule.AudioPlayer>;
-  }, [source]);
+  const playerRef = useRef<InstanceType<typeof AudioModule.AudioPlayer> | null>(null);
 
   useEffect(() => {
+    if (!audioUrl) return;
+
+    const p = new AudioModule.AudioPlayer({ uri: audioUrl });
+    playerRef.current = p;
+
     return () => {
-      try { player.remove(); } catch { /* ignore */ }
+      try { p.remove(); } catch { /* ignore */ }
+      playerRef.current = null;
     };
-  }, [player]);
+  }, [audioUrl]);
+
+  const player = playerRef.current;
 
   const [status, setStatus] = useState<AudioStatus>({
     id: 0,
@@ -38,6 +37,7 @@ export function useAudioPlayer(audioUrl: string | null) {
   });
 
   useEffect(() => {
+    if (!player) return;
     const sub = player.addListener("playbackStatusUpdate", (s: AudioStatus) => {
       setStatus(s);
     });
@@ -59,23 +59,23 @@ export function useAudioPlayer(audioUrl: string | null) {
   const isPlaying = status.playing ?? false;
 
   const play = useCallback(() => {
-    if (!audioUrl) return;
+    if (!audioUrl || !player) return;
     player.play();
   }, [player, audioUrl]);
 
   const pause = useCallback(() => {
-    player.pause();
+    player?.pause();
   }, [player]);
 
   const togglePlay = useCallback(() => {
-    if (!audioUrl) return;
+    if (!audioUrl || !player) return;
     if (isPlaying) player.pause();
     else player.play();
   }, [isPlaying, player, audioUrl]);
 
   const seekTo = useCallback(
     (ms: number) => {
-      player.seekTo(ms / 1000);
+      player?.seekTo(ms / 1000);
     },
     [player]
   );
@@ -91,7 +91,7 @@ export function useAudioPlayer(audioUrl: string | null) {
   const setPlaybackRate = useCallback(
     (newRate: number) => {
       setRate(newRate);
-      player.setPlaybackRate(newRate);
+      player?.setPlaybackRate(newRate);
     },
     [player]
   );
