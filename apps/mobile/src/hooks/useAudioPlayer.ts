@@ -8,7 +8,7 @@ export function useAudioPlayer(audioUrl: string | null) {
   useEffect(() => {
     if (!audioUrl) return;
 
-    const p = createAudioPlayer(audioUrl, 250);
+    const p = createAudioPlayer(audioUrl);
     playerRef.current = p;
 
     return () => {
