@@ -83,15 +83,14 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
     if (!sessionId) return;
 
     try {
-      // Stop recording and upload final chunk
+      // Stop recording and queue final chunk — this is fast
       await chunkManager.stopSession();
 
-      // Wait for ALL chunks (including the final partial) to finish uploading
-      await uploadQueue.waitForDrain();
+      // Register the session for auto-complete once uploads finish
+      // This does NOT block — uploads continue in the background
+      uploadQueue.registerSessionComplete(sessionId, label);
 
-      // Now signal session complete — server can safely process all chunks
-      await apiPost("/api/sessions/complete", { sessionId, label });
-
+      // Immediately free the UI so the user can start a new recording
       set({
         isRecording: false,
         sessionId: null,

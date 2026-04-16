@@ -1,19 +1,38 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { View, ActivityIndicator } from "react-native";
+import { AppState, View, ActivityIndicator } from "react-native";
+import type { AppStateStatus } from "react-native";
 import { useAuthStore } from "../stores/auth-store";
 import { uploadQueue } from "../services/recording/UploadQueue";
+import { useRecordingStore } from "../stores/recording-store";
 
 export default function RootLayout() {
   const { session, loading, initialize } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
   const [ready, setReady] = useState(false);
+  const appState = useRef(AppState.currentState);
 
   useEffect(() => {
     initialize().then(() => setReady(true)).catch(() => setReady(true));
     uploadQueue.restore();
+  }, []);
+
+  // Handle app background/foreground transitions
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+      if (appState.current.match(/inactive|background/) && nextState === "active") {
+        // Coming back to foreground — sync elapsed time and retry uploads
+        const { isRecording, startedAt } = useRecordingStore.getState();
+        if (isRecording && startedAt) {
+          useRecordingStore.setState({ elapsedMs: Date.now() - startedAt.getTime() });
+        }
+        uploadQueue.restore();
+      }
+      appState.current = nextState;
+    });
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {

@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 import { API_BASE_URL } from "../../constants/recording";
 import { supabase } from "../../lib/supabase";
 
@@ -12,16 +13,35 @@ interface ChunkUploadJob {
   retries: number;
 }
 
+interface PendingComplete {
+  sessionId: string;
+  label: string;
+}
+
 const STORAGE_KEY = "flex_upload_queue";
+const COMPLETE_KEY = "flex_pending_completes";
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 
 class UploadQueue {
   private queue: ChunkUploadJob[] = [];
   private processing = false;
+  private isOnline = true;
   private onStatusChange?: (uploaded: number, total: number) => void;
   private uploadedCount = 0;
-  private drainResolvers: Array<() => void> = [];
+  private pendingCompletes: PendingComplete[] = [];
+
+  constructor() {
+    // Listen for network changes
+    NetInfo.addEventListener((state) => {
+      const wasOffline = !this.isOnline;
+      this.isOnline = state.isConnected ?? true;
+      // Resume processing when coming back online
+      if (wasOffline && this.isOnline && this.queue.length > 0) {
+        this.processNext();
+      }
+    });
+  }
 
   setOnStatusChange(callback: (uploaded: number, total: number) => void) {
     this.onStatusChange = callback;
@@ -29,12 +49,18 @@ class UploadQueue {
 
   async restore(): Promise<void> {
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      const [stored, completes] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEY),
+        AsyncStorage.getItem(COMPLETE_KEY),
+      ]);
       if (stored) {
         this.queue = JSON.parse(stored);
-        if (this.queue.length > 0) {
-          this.processNext();
-        }
+      }
+      if (completes) {
+        this.pendingCompletes = JSON.parse(completes);
+      }
+      if (this.queue.length > 0) {
+        this.processNext();
       }
     } catch {
       // ignore
@@ -49,30 +75,56 @@ class UploadQueue {
   }
 
   /**
-   * Wait for all queued uploads to finish.
-   * Call this before signaling session complete to the server.
+   * Register a session to be completed once all its chunks are uploaded.
+   * This replaces the old waitForDrain() approach — the UI is never blocked.
    */
-  async waitForDrain(): Promise<void> {
-    if (this.queue.length === 0 && !this.processing) return;
-    return new Promise<void>((resolve) => {
-      this.drainResolvers.push(resolve);
-    });
+  registerSessionComplete(sessionId: string, label: string): void {
+    this.pendingCompletes.push({ sessionId, label });
+    this.persistCompletes();
+    // Check immediately in case queue is already drained for this session
+    this.checkSessionCompletes();
   }
 
-  private checkDrain(): void {
-    if (this.queue.length === 0 && !this.processing) {
-      const resolvers = this.drainResolvers.splice(0);
-      for (const resolve of resolvers) {
-        resolve();
+  private async checkSessionCompletes(): Promise<void> {
+    const remaining = [...this.pendingCompletes];
+    const fulfilled: PendingComplete[] = [];
+
+    for (const pc of remaining) {
+      const hasChunks = this.queue.some((j) => j.sessionId === pc.sessionId);
+      if (!hasChunks && !this.processing) {
+        fulfilled.push(pc);
       }
     }
+
+    for (const pc of fulfilled) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          await fetch(`${API_BASE_URL}/api/sessions/complete`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ sessionId: pc.sessionId, label: pc.label }),
+          });
+        }
+      } catch {
+        // Will retry on next drain check
+        continue;
+      }
+      this.pendingCompletes = this.pendingCompletes.filter(
+        (p) => p.sessionId !== pc.sessionId
+      );
+    }
+
+    this.persistCompletes();
   }
 
   private async processNext(): Promise<void> {
-    if (this.processing || this.queue.length === 0) {
-      this.checkDrain();
-      return;
-    }
+    if (this.processing || this.queue.length === 0) return;
+    if (!this.isOnline) return;
+
     this.processing = true;
 
     const job = this.queue[0];
@@ -81,17 +133,17 @@ class UploadQueue {
       await this.uploadChunk(job);
       this.queue.shift();
       this.uploadedCount += 1;
-      this.persist();
+      await this.persist();
       this.emitStatus();
     } catch (error) {
       console.error(`Upload failed for chunk ${job.chunkIndex}:`, error);
 
       if (job.retries >= MAX_RETRIES) {
         this.queue.shift();
-        this.persist();
+        await this.persist();
       } else {
         job.retries += 1;
-        this.persist();
+        await this.persist();
         const delay = Math.min(BASE_DELAY_MS * Math.pow(2, job.retries), 60000);
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -102,7 +154,8 @@ class UploadQueue {
     if (this.queue.length > 0) {
       this.processNext();
     } else {
-      this.checkDrain();
+      // All uploads done — check if any sessions are ready to complete
+      this.checkSessionCompletes();
     }
   }
 
@@ -144,6 +197,14 @@ class UploadQueue {
   private async persist(): Promise<void> {
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(this.queue));
+    } catch {
+      // ignore
+    }
+  }
+
+  private async persistCompletes(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(COMPLETE_KEY, JSON.stringify(this.pendingCompletes));
     } catch {
       // ignore
     }

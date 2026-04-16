@@ -42,7 +42,6 @@ function RecordingView({ isManager }: { isManager: boolean }) {
 
   const [showStopModal, setShowStopModal] = useState(false);
   const [label, setLabel] = useState("");
-  const [stopping, setStopping] = useState(false);
   const [pausedTime, setPausedTime] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -78,15 +77,14 @@ function RecordingView({ isManager }: { isManager: boolean }) {
 
   async function handleStop() {
     if (!label.trim()) return;
-    setStopping(true);
     await stopAndName(label.trim());
-    setStopping(false);
     setShowStopModal(false);
     setPausedTime(null);
     setLabel("");
+    haptic.success();
     Alert.alert(
       "Session Saved",
-      "Your recording is being processed. Conversations will appear in your Conversations tab shortly."
+      "Your recording is uploading in the background. You can start a new recording right away."
     );
   }
 
@@ -229,14 +227,12 @@ function RecordingView({ isManager }: { isManager: boolean }) {
               <TouchableOpacity
                 style={[
                   styles.modalSave,
-                  (!label.trim() || stopping) && styles.buttonDisabled,
+                  !label.trim() && styles.buttonDisabled,
                 ]}
                 onPress={handleStop}
-                disabled={!label.trim() || stopping}
+                disabled={!label.trim()}
               >
-                <Text style={styles.modalSaveText}>
-                  {stopping ? "Uploading..." : "Save & Process"}
-                </Text>
+                <Text style={styles.modalSaveText}>Save & Process</Text>
               </TouchableOpacity>
             </View>
           </View>
