@@ -58,7 +58,7 @@ export default function CoachingScreen() {
       ListHeaderComponent={
         <View style={styles.toggleRow}>
           <TouchableOpacity
-            style={[styles.toggleButton, activeTab === "pending" && styles.toggleActive]}
+            style={[styles.toggleButton, activeTab === "pending" && styles.toggleActivePending]}
             onPress={() => setActiveTab("pending")}
           >
             <Ionicons name="time" size={16} color={activeTab === "pending" ? "#eab308" : "#71717a"} />
@@ -67,10 +67,10 @@ export default function CoachingScreen() {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.toggleButton, activeTab === "responded" && styles.toggleActive]}
+            style={[styles.toggleButton, activeTab === "responded" && styles.toggleActiveResponded]}
             onPress={() => setActiveTab("responded")}
           >
-            <Ionicons name="checkmark-circle" size={16} color={activeTab === "responded" ? "#35b2ff" : "#71717a"} />
+            <Ionicons name="checkmark-circle" size={16} color={activeTab === "responded" ? "#22c55e" : "#71717a"} />
             <Text style={[styles.toggleText, activeTab === "responded" && styles.toggleTextActiveResponded]}>
               Responded{respondedCount > 0 ? ` (${respondedCount})` : ""}
             </Text>
@@ -149,14 +149,19 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "transparent",
   },
-  toggleActive: {
-    backgroundColor: "rgba(53,178,255,0.1)",
+  toggleActivePending: {
+    backgroundColor: "rgba(234,179,8,0.1)",
     borderWidth: 1,
-    borderColor: "rgba(53,178,255,0.2)",
+    borderColor: "rgba(234,179,8,0.25)",
+  },
+  toggleActiveResponded: {
+    backgroundColor: "rgba(34,197,94,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(34,197,94,0.25)",
   },
   toggleText: { color: "#71717a", fontSize: 14, fontWeight: "500" },
   toggleTextActivePending: { color: "#eab308" },
-  toggleTextActiveResponded: { color: "#35b2ff" },
+  toggleTextActiveResponded: { color: "#22c55e" },
   card: {
     marginHorizontal: 16, marginTop: 12, backgroundColor: "#18181b",
     borderRadius: 12, borderWidth: 1, borderColor: "#27272a", padding: 16, gap: 6,

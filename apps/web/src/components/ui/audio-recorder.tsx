@@ -45,8 +45,8 @@ export function AudioRecorder({ onRecorded, disabled }: AudioRecorderProps) {
       timerRef.current = setInterval(() => {
         setDuration(Math.round((Date.now() - startTimeRef.current) / 1000));
       }, 500);
-    } catch {
-      // Permission denied or no mic
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Microphone access denied. Check your browser permissions.");
     }
   }, [onRecorded]);
 
@@ -105,28 +105,15 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationSeconds ?? 0);
-  const [error, setError] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animRef = useRef<number>(0);
 
-  // Preload audio on mount
+  // Get audio element ref after mount
   useEffect(() => {
-    const a = new Audio();
-    a.preload = "metadata";
-    a.onloadedmetadata = () => {
-      if (a.duration && isFinite(a.duration)) setDuration(a.duration);
-    };
-    a.onended = () => { setPlaying(false); setProgress(0); setCurrentTime(0); };
-    a.onerror = () => setError(true);
-    a.src = url;
-    audioRef.current = a;
-
-    return () => {
-      a.pause();
-      a.src = "";
-      audioRef.current = null;
-    };
-  }, [url]);
+    const el = containerRef.current?.querySelector("audio") as HTMLAudioElement | null;
+    if (el) audioRef.current = el;
+  }, []);
 
   function tick() {
     const a = audioRef.current;
@@ -137,6 +124,13 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
       animRef.current = requestAnimationFrame(tick);
     }
   }
+
+  const handleMetadata = () => {
+    const a = audioRef.current;
+    if (a?.duration && isFinite(a.duration)) setDuration(a.duration);
+  };
+
+  const handleEnded = () => { setPlaying(false); setProgress(0); setCurrentTime(0); };
 
   const toggle = async () => {
     const a = audioRef.current;
@@ -150,10 +144,7 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
         await a.play();
         animRef.current = requestAnimationFrame(tick);
         setPlaying(true);
-        setError(false);
-      } catch {
-        setError(true);
-      }
+      } catch { /* ignore autoplay block */ }
     }
   };
 
@@ -175,16 +166,15 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
     return `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, "0")}`;
   };
 
-  if (error) {
-    return (
-      <div className="flex items-center gap-1.5 rounded-lg bg-red-500/10 border border-red-500/20 px-2.5 py-1.5 text-xs text-red-400">
-        Audio unavailable
-      </div>
-    );
-  }
-
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
+    <div ref={containerRef} className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
+      {/* Hidden native audio element handles format detection and decoding */}
+      <audio preload="metadata" onLoadedMetadata={handleMetadata} onEnded={handleEnded} style={{ display: "none" }}>
+        <source src={url} type="audio/mp4" />
+        <source src={url} type="audio/x-m4a" />
+        <source src={url} type="audio/webm" />
+        <source src={url} />
+      </audio>
       <button onClick={toggle} className="shrink-0 w-6 h-6 rounded-full bg-sky-500 flex items-center justify-center hover:bg-sky-400 transition-colors">
         {playing ? (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
