@@ -5,6 +5,8 @@ type NotificationType =
   | "help_request_response"
   | "call_analyzed"
   | "coaching_note"
+  | "coaching_note_mention"
+  | "call_shared"
   | "session_complete"
   | "badge_earned";
 
@@ -72,5 +74,25 @@ export async function notifySessionComplete(repId: string, conversationCount: nu
     "Recording processed",
     `${conversationCount} conversation${conversationCount !== 1 ? "s" : ""} from "${sessionLabel}"`,
     {}
+  );
+}
+
+export async function notifyCallShared(userId: string, sharedByName: string, customerName: string, callId: string) {
+  await createNotification(
+    userId,
+    "call_shared",
+    `${sharedByName} shared a conversation`,
+    `Call with ${customerName}`,
+    { callId }
+  );
+}
+
+export async function notifyCoachingMention(userId: string, authorName: string, customerName: string, callId: string, noteId: string) {
+  await createNotification(
+    userId,
+    "coaching_note_mention",
+    `${authorName} mentioned you`,
+    `Coaching note on call with ${customerName}`,
+    { callId, noteId }
   );
 }

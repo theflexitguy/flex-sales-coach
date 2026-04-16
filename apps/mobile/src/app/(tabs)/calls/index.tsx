@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   View,
   Text,
@@ -11,10 +12,13 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../../services/api";
 import { useCachedFetch } from "../../../hooks/useCachedFetch";
+import { useAuthStore } from "../../../stores/auth-store";
 
 interface CallItem {
   id: string;
   customerName: string | null;
+  repName: string | null;
+  repId: string;
   durationSeconds: number;
   status: string;
   recordedAt: string;
@@ -31,12 +35,17 @@ const GRADE_COLORS: Record<string, string> = {
   poor: "#ef4444",
 };
 
+type CallsFilter = "mine" | "team" | "shared";
+
 export default function CallsListScreen() {
   const router = useRouter();
+  const profile = useAuthStore((s) => s.profile);
+  const isManager = profile?.role === "manager";
+  const [filter, setFilter] = useState<CallsFilter>("mine");
 
   const { data, loading, refreshing, refresh } = useCachedFetch(
-    "calls-list",
-    () => apiGet<{ calls: CallItem[] }>("/api/mobile/calls?limit=50")
+    `calls-list-${filter}`,
+    () => apiGet<{ calls: CallItem[] }>(`/api/mobile/calls?limit=50&filter=${filter}`)
   );
 
   const calls = data?.calls ?? [];
@@ -78,12 +87,36 @@ export default function CallsListScreen() {
           tintColor="#35b2ff"
         />
       }
+      ListHeaderComponent={
+        isManager ? (
+          <View style={styles.toggleRow}>
+            <TouchableOpacity
+              style={[styles.toggleButton, filter === "mine" && styles.toggleActive]}
+              onPress={() => setFilter("mine")}
+            >
+              <Ionicons name="person" size={16} color={filter === "mine" ? "#35b2ff" : "#71717a"} />
+              <Text style={[styles.toggleText, filter === "mine" && styles.toggleTextActive]}>My Calls</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toggleButton, filter === "team" && styles.toggleActive]}
+              onPress={() => setFilter("team")}
+            >
+              <Ionicons name="people" size={16} color={filter === "team" ? "#35b2ff" : "#71717a"} />
+              <Text style={[styles.toggleText, filter === "team" && styles.toggleTextActive]}>Team</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null
+      }
       ListEmptyComponent={
         <View style={styles.empty}>
           <Ionicons name="mic-off-outline" size={48} color="#3f3f46" />
-          <Text style={styles.emptyTitle}>No conversations yet</Text>
+          <Text style={styles.emptyTitle}>
+            {filter === "team" ? "No team conversations" : "No conversations yet"}
+          </Text>
           <Text style={styles.emptySubtitle}>
-            Record a conversation to see it here
+            {filter === "team"
+              ? "Your reps' conversations will appear here"
+              : "Record a conversation to see it here"}
           </Text>
         </View>
       }
@@ -98,6 +131,7 @@ export default function CallsListScreen() {
                 {item.customerName ?? "Unknown Customer"}
               </Text>
               <Text style={styles.meta}>
+                {filter === "team" && item.repName ? `${item.repName} · ` : ""}
                 {formatDate(item.recordedAt)} · {formatDuration(item.durationSeconds)}
               </Text>
             </View>
@@ -152,6 +186,30 @@ const styles = StyleSheet.create({
   empty: { flex: 1, justifyContent: "center", alignItems: "center", gap: 8 },
   emptyTitle: { color: "#a1a1aa", fontSize: 16, fontWeight: "500" },
   emptySubtitle: { color: "#52525b", fontSize: 14 },
+  toggleRow: {
+    flexDirection: "row",
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  toggleButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "transparent",
+  },
+  toggleActive: {
+    backgroundColor: "rgba(53,178,255,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(53,178,255,0.2)",
+  },
+  toggleText: { color: "#71717a", fontSize: 14, fontWeight: "500" },
+  toggleTextActive: { color: "#35b2ff" },
   card: {
     marginHorizontal: 16,
     marginTop: 12,

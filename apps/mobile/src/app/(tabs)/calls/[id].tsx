@@ -30,6 +30,7 @@ import { apiGet, apiPost } from "../../../services/api";
 import { reverseGeocode } from "../../../services/location";
 import { VoiceNoteRecorder } from "../../../components/calls/voice-note-recorder";
 import { VoiceNotePlayer } from "../../../components/calls/voice-note-player";
+import { useAuthStore } from "../../../stores/auth-store";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e",
@@ -136,8 +137,14 @@ export default function CallDetailScreen() {
   const router = useRouter();
   const audioPlayer = useAudioPlayer(data?.call.audioUrl ?? null);
   const [address, setAddress] = useState<string | null>(null);
+  const profile = useAuthStore((s) => s.profile);
+  const isManager = profile?.role === "manager";
+  const [shareModal, setShareModal] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; role: string }>>([]);
+  const [selectedShareIds, setSelectedShareIds] = useState<Set<string>>(new Set());
+  const [sharing, setSharing] = useState(false);
 
-  // Set header with back button
+  // Set header with back button + share button for managers
   useEffect(() => {
     navigation.setOptions({
       title: data?.call.customerName ?? "Conversation",
@@ -147,8 +154,21 @@ export default function CallDetailScreen() {
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </TouchableOpacity>
       ),
+      headerRight: isManager ? () => (
+        <TouchableOpacity
+          onPress={async () => {
+            const res = await apiGet<{ members: Array<{ id: string; fullName: string; role: string }> }>("/api/mobile/team-members");
+            setTeamMembers(res.members);
+            setSelectedShareIds(new Set());
+            setShareModal(true);
+          }}
+          style={{ marginLeft: 8 }}
+        >
+          <Ionicons name="share-outline" size={22} color="#35b2ff" />
+        </TouchableOpacity>
+      ) : undefined,
     });
-  }, [data?.call.customerName, navigation, router]);
+  }, [data?.call.customerName, navigation, router, isManager]);
 
   // Reverse geocode location
   useEffect(() => {
@@ -907,6 +927,98 @@ export default function CallDetailScreen() {
         </View>
       </KeyboardAvoidingView>
     </Modal>
+    {/* Share Modal */}
+    <Modal visible={shareModal} transparent animationType="slide">
+      <KeyboardAvoidingView style={styles.helpModalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <Pressable style={styles.helpModalBackdrop} onPress={() => setShareModal(false)} />
+        <View style={styles.helpModalContent}>
+          <Text style={styles.helpModalTitle}>Share Conversation</Text>
+          <Text style={{ color: "#71717a", fontSize: 13, marginBottom: 12 }}>
+            Select reps who should be able to view this conversation
+          </Text>
+
+          {/* Share with everyone button */}
+          <TouchableOpacity
+            style={[styles.shareEveryoneBtn, sharing && { opacity: 0.5 }]}
+            disabled={sharing}
+            onPress={async () => {
+              setSharing(true);
+              try {
+                await apiPost(`/api/calls/${call.id}/share`, { userIds: "everyone" });
+                haptic.success();
+                setShareModal(false);
+                Alert.alert("Shared", "Conversation shared with the entire team");
+              } catch {
+                Alert.alert("Error", "Failed to share");
+              }
+              setSharing(false);
+            }}
+          >
+            <Ionicons name="people" size={16} color="#35b2ff" />
+            <Text style={{ color: "#35b2ff", fontSize: 14, fontWeight: "600" }}>Share with Everyone</Text>
+          </TouchableOpacity>
+
+          {/* Individual rep selection */}
+          <View style={{ maxHeight: 280, marginTop: 12 }}>
+            {teamMembers.map((m) => {
+              const selected = selectedShareIds.has(m.id);
+              return (
+                <TouchableOpacity
+                  key={m.id}
+                  style={styles.shareMemberRow}
+                  onPress={() => {
+                    setSelectedShareIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(m.id)) next.delete(m.id);
+                      else next.add(m.id);
+                      return next;
+                    });
+                  }}
+                >
+                  <View style={[styles.shareCheckbox, selected && styles.shareCheckboxActive]}>
+                    {selected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                  </View>
+                  <Text style={{ color: "#d4d4d8", fontSize: 14, flex: 1 }}>{m.fullName}</Text>
+                  <Text style={{ color: "#52525b", fontSize: 11, textTransform: "capitalize" }}>{m.role}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            {teamMembers.length === 0 && (
+              <Text style={{ color: "#52525b", fontSize: 13, textAlign: "center", paddingVertical: 20 }}>
+                No team members found
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.helpActions}>
+            <TouchableOpacity style={styles.helpCancel} onPress={() => setShareModal(false)}>
+              <Text style={styles.helpCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.helpSend, (sharing || selectedShareIds.size === 0) && { opacity: 0.5 }]}
+              disabled={sharing || selectedShareIds.size === 0}
+              onPress={async () => {
+                setSharing(true);
+                try {
+                  await apiPost(`/api/calls/${call.id}/share`, { userIds: [...selectedShareIds] });
+                  haptic.success();
+                  setShareModal(false);
+                  Alert.alert("Shared", `Shared with ${selectedShareIds.size} team member${selectedShareIds.size > 1 ? "s" : ""}`);
+                } catch {
+                  Alert.alert("Error", "Failed to share");
+                }
+                setSharing(false);
+              }}
+            >
+              <Ionicons name="share" size={16} color="#fff" />
+              <Text style={styles.helpSendText}>
+                {sharing ? "Sharing..." : `Share (${selectedShareIds.size})`}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
     {/* AI Chat FAB */}
     <CallAIChat callId={call.id} />
     </>
@@ -1097,6 +1209,38 @@ const styles = StyleSheet.create({
   replySendText: { color: "#000", fontSize: 13, fontWeight: "600" as const },
   statusBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
   transcriptHint: { color: "#52525b", fontSize: 12, marginBottom: 8, fontStyle: "italic" },
+  shareEveryoneBtn: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "rgba(53,178,255,0.3)",
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: "rgba(53,178,255,0.05)",
+  },
+  shareMemberRow: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#27272a",
+  },
+  shareCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#3f3f46",
+    justifyContent: "center" as const,
+    alignItems: "center" as const,
+  },
+  shareCheckboxActive: {
+    backgroundColor: "#35b2ff",
+    borderColor: "#35b2ff",
+  },
   // Help request modal
   helpModalOverlay: { flex: 1 },
   helpModalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)" },
