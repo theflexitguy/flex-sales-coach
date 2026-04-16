@@ -1,44 +1,47 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { createClient } from "@flex/supabase/client";
 import Link from "next/link";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"manager" | "rep">("rep");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const router = useRouter();
-  const supabase = createClient();
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-          role,
-        },
-      },
-    });
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          fullName,
+          inviteCode: inviteCode.trim(),
+        }),
+      });
 
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
-      return;
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Signup failed");
+        setLoading(false);
+        return;
+      }
+
+      setSuccess(true);
+    } catch {
+      setError("Network error. Please try again.");
     }
 
-    setSuccess(true);
     setLoading(false);
   }
 
@@ -50,16 +53,15 @@ export default function SignupPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-2xl font-bold text-white">Check your email</h2>
+        <h2 className="text-2xl font-bold text-white">You&apos;re in!</h2>
         <p className="text-zinc-400">
-          We sent a confirmation link to <span className="text-white font-medium">{email}</span>.
-          Click it to activate your account.
+          Your account has been created and you&apos;ve been added to the team. You can now sign in.
         </p>
         <Link
           href="/login"
           className="inline-block text-sky-400 hover:text-sky-300 font-medium"
         >
-          Back to sign in
+          Sign in
         </Link>
       </div>
     );
@@ -73,7 +75,7 @@ export default function SignupPage() {
           Flex Sales Coach
         </div>
         <h1 className="text-3xl font-bold text-white">Create your account</h1>
-        <p className="text-zinc-400">Join your team and start coaching</p>
+        <p className="text-zinc-400">Enter your invite code to join your team</p>
       </div>
 
       <form onSubmit={handleSignup} className="space-y-4">
@@ -130,31 +132,18 @@ export default function SignupPage() {
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-300">I am a</label>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setRole("rep")}
-              className={`rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
-                role === "rep"
-                  ? "border-sky-500 bg-sky-500/10 text-sky-400"
-                  : "border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600"
-              }`}
-            >
-              Sales Rep
-            </button>
-            <button
-              type="button"
-              onClick={() => setRole("manager")}
-              className={`rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
-                role === "manager"
-                  ? "border-sky-500 bg-sky-500/10 text-sky-400"
-                  : "border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600"
-              }`}
-            >
-              Manager
-            </button>
-          </div>
+          <label htmlFor="inviteCode" className="block text-sm font-medium text-zinc-300">
+            Team Invite Code
+          </label>
+          <input
+            id="inviteCode"
+            type="text"
+            required
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-3 text-white placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition-colors uppercase tracking-widest"
+            placeholder="Enter code from your manager"
+          />
         </div>
 
         <button

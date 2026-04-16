@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { useRouter } from "expo-router";
-import { supabase } from "../../lib/supabase";
 import { haptic } from "../../lib/haptics";
 
 export default function SignupScreen() {
@@ -14,40 +13,39 @@ export default function SignupScreen() {
   const router = useRouter();
 
   async function handleSignup() {
-    if (!fullName || !email || !password) return;
+    if (!fullName || !email || !password || !inviteCode.trim()) return;
     setError(null);
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName, role: "rep" } },
-    });
+    try {
+      const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          fullName,
+          inviteCode: inviteCode.trim(),
+        }),
+      });
 
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Signup failed");
+        setLoading(false);
+        haptic.error();
+        return;
+      }
+
+      haptic.success();
+      Alert.alert("Account Created", "You can now sign in with your email and password.");
+      router.replace("/auth/login");
+    } catch {
+      setError("Network error. Please try again.");
       haptic.error();
-      return;
     }
 
-    // If invite code provided, join team
-    if (inviteCode.trim()) {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/team/join`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-            body: JSON.stringify({ code: inviteCode.trim() }),
-          });
-        }
-      } catch { /* join can be done later */ }
-    }
-
-    haptic.success();
-    Alert.alert("Account Created", "Check your email for a confirmation link, then sign in.");
-    router.replace("/auth/login");
     setLoading(false);
   }
 
@@ -72,8 +70,8 @@ export default function SignupScreen() {
           <Text style={[styles.label, { marginTop: 12 }]}>Password</Text>
           <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="At least 8 characters" placeholderTextColor="#71717a" secureTextEntry />
 
-          <Text style={[styles.label, { marginTop: 12 }]}>Team Invite Code (optional)</Text>
-          <TextInput style={styles.input} value={inviteCode} onChangeText={setInviteCode} placeholder="Enter code from your manager" placeholderTextColor="#71717a" autoCapitalize="characters" />
+          <Text style={[styles.label, { marginTop: 12 }]}>Team Invite Code</Text>
+          <TextInput style={styles.input} value={inviteCode} onChangeText={setInviteCode} placeholder="Required — get this from your manager" placeholderTextColor="#71717a" autoCapitalize="characters" />
 
           <TouchableOpacity style={[styles.button, loading && { opacity: 0.5 }]} onPress={handleSignup} disabled={loading}>
             <Text style={styles.buttonText}>{loading ? "Creating..." : "Create Account"}</Text>

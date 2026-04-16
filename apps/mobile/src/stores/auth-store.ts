@@ -25,32 +25,36 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loading: true,
 
   initialize: async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    if (session?.user) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
 
-      set({
-        session,
-        user: session.user,
-        profile: profile
-          ? {
-              id: profile.id,
-              fullName: profile.full_name,
-              email: profile.email,
-              role: profile.role,
-              teamId: profile.team_id,
-            }
-          : null,
-        loading: false,
-      });
-    } else {
+        set({
+          session,
+          user: session.user,
+          profile: profile
+            ? {
+                id: profile.id,
+                fullName: profile.full_name,
+                email: profile.email,
+                role: profile.role,
+                teamId: profile.team_id,
+              }
+            : null,
+          loading: false,
+        });
+      } else {
+        set({ session: null, user: null, profile: null, loading: false });
+      }
+    } catch (error) {
       set({ session: null, user: null, profile: null, loading: false });
     }
 

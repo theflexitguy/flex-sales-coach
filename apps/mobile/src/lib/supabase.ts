@@ -6,15 +6,8 @@ const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  const missing = [
-    !supabaseUrl && "EXPO_PUBLIC_SUPABASE_URL",
-    !supabaseAnonKey && "EXPO_PUBLIC_SUPABASE_ANON_KEY",
-  ]
-    .filter(Boolean)
-    .join(", ");
-  console.error(
-    `[Flex] Missing required environment variables: ${missing}. ` +
-      "Set them as EAS secrets: eas secret:create --scope project --name <VAR> --value <VALUE>"
+  throw new Error(
+    "Missing Supabase config. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY."
   );
 }
 
@@ -39,7 +32,7 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
-export const supabase = createClient(supabaseUrl ?? "https://placeholder.supabase.co", supabaseAnonKey ?? "placeholder", {
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: ExpoSecureStoreAdapter,
     autoRefreshToken: true,

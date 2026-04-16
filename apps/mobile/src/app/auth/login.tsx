@@ -87,8 +87,8 @@ export default function LoginScreen() {
 
           <TouchableOpacity onPress={() => router.push("/auth/signup")} style={{ marginTop: 16, alignItems: "center" }}>
             <Text style={{ color: "#a1a1aa", fontSize: 14 }}>
-              Don&apos;t have an account?{" "}
-              <Text style={{ color: "#35b2ff", fontWeight: "600" }}>Sign up</Text>
+              Have an invite code?{" "}
+              <Text style={{ color: "#35b2ff", fontWeight: "600" }}>Join your team</Text>
             </Text>
           </TouchableOpacity>
         </View>
