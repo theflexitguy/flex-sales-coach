@@ -230,10 +230,13 @@ export default function CallDetailScreen() {
   // Seek audio and scroll to the matching utterance
   const seekToTimestamp = useCallback(async (ms: number) => {
     lastAutoScrollIndex.current = -1;
+    setAutoFollow(true);
+    setUserScrolledAway(false);
+
     await audioPlayer.seekTo(ms);
     if (!audioPlayer.isPlaying) audioPlayer.play();
 
-    // Find the utterance at this timestamp
+    // Scroll to the matching utterance — try measured position first
     const utterances = data?.transcript.utterances ?? [];
     const idx = utterances.findIndex(
       (u, i, arr) => {
@@ -242,35 +245,34 @@ export default function CallDetailScreen() {
       }
     );
 
-    if (idx >= 0) {
-      // Try measured position first
+    if (idx < 0) return;
+
+    const scrollToUtterance = () => {
       const localY = utteranceYPositions.current[idx];
       if (localY != null) {
         isAutoScrolling.current = true;
         scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + localY - 120, animated: true });
         setTimeout(() => { isAutoScrolling.current = false; }, 500);
-      } else {
-        // Positions not measured — estimate based on index
-        // Average utterance height is ~70px, plus section header ~60px
-        const estimatedY = transcriptSectionY.current + 60 + (idx * 70);
-        isAutoScrolling.current = true;
-        scrollViewRef.current?.scrollTo({ y: estimatedY - 120, animated: false });
-        setTimeout(() => { isAutoScrolling.current = false; }, 300);
-
-        // After scrolling brings the utterance into view, try again with real position
-        setTimeout(() => {
-          const measuredY = utteranceYPositions.current[idx];
-          if (measuredY != null) {
-            isAutoScrolling.current = true;
-            scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + measuredY - 120, animated: true });
-            setTimeout(() => { isAutoScrolling.current = false; }, 500);
-          }
-        }, 600);
+        return true;
       }
+      return false;
+    };
+
+    // If position is already known, scroll immediately
+    if (scrollToUtterance()) return;
+
+    // Otherwise, scroll to the transcript section to trigger layout, then retry multiple times
+    isAutoScrolling.current = true;
+    scrollViewRef.current?.scrollToEnd({ animated: false });
+
+    const retryTimes = [300, 600, 1000, 1500];
+    for (const delay of retryTimes) {
+      setTimeout(() => {
+        if (scrollToUtterance()) return;
+      }, delay);
     }
 
-    setAutoFollow(true);
-    setUserScrolledAway(false);
+    setTimeout(() => { isAutoScrolling.current = false; }, 2000);
   }, [audioPlayer, data?.transcript.utterances]);
 
   function fetchData() {
