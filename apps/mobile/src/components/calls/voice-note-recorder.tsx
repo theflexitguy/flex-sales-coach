@@ -86,11 +86,12 @@ export function VoiceNoteRecorder({ onRecorded, storagePath }: VoiceNoteRecorder
 
       if (error) throw error;
 
-      const { data: urlData } = supabase.storage
+      const { data: signedData } = await supabase.storage
         .from("audio-notes")
-        .getPublicUrl(fileName);
+        .createSignedUrl(fileName, 365 * 24 * 3600); // 1 year
 
-      onRecorded(urlData.publicUrl);
+      if (!signedData?.signedUrl) throw new Error("Failed to get audio URL");
+      onRecorded(signedData.signedUrl);
       haptic.success();
     } catch (err) {
       haptic.error();

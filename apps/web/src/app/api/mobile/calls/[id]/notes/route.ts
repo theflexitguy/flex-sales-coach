@@ -10,15 +10,17 @@ export async function POST(
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { content, timestampMs } = await request.json();
-  if (!content?.trim()) return NextResponse.json({ error: "Content required" }, { status: 400 });
+  const { content, timestampMs, audioUrl, audioDurationSeconds } = await request.json();
+  if (!content?.trim() && !audioUrl) return NextResponse.json({ error: "Content or audio required" }, { status: 400 });
 
   const admin = createAdmin();
   const { error } = await admin.from("coaching_notes").insert({
     call_id: id,
     author_id: auth.user.id,
-    content: content.trim(),
+    content: content?.trim() || (audioUrl ? "Audio note" : ""),
     timestamp_ms: timestampMs ?? null,
+    audio_url: audioUrl ?? null,
+    audio_duration_seconds: audioDurationSeconds ?? null,
   });
 
   if (error) return NextResponse.json({ error: "Failed to save note" }, { status: 500 });
