@@ -43,7 +43,7 @@ export default function LoginPage() {
       <div className="text-center space-y-2">
         <div className="inline-flex items-center gap-2 text-sky-400 font-semibold text-sm tracking-widest uppercase">
           <span className="w-2 h-2 rounded-full bg-sky-400" />
-          Flex Sales Coach
+          koachr
         </div>
         <h1 className="text-3xl font-bold text-white">Welcome back</h1>
         <p className="text-zinc-400">Sign in to your account</p>

@@ -162,10 +162,10 @@ export function Sidebar({ user, onSignOut }: SidebarProps) {
       {/* Logo */}
       <div className="flex items-center gap-3 px-6 py-5 border-b border-zinc-800">
         <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-sky-500/10">
-          <span className="text-sky-400 font-bold text-lg">F</span>
+          <span className="text-sky-400 font-bold text-lg">k</span>
         </div>
         <div>
-          <span className="text-white font-semibold text-sm">Flex Sales Coach</span>
+          <span className="text-white font-semibold text-sm">koachr</span>
           <span className="block text-zinc-500 text-xs capitalize">{user.role} view</span>
         </div>
       </div>

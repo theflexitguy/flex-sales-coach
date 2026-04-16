@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flex Sales Coach",
+  title: "koachr",
   description: "AI-powered sales coaching for door-to-door teams",
 };
 
