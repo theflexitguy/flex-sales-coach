@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { UserProfile } from "@flex/shared";
@@ -161,8 +162,8 @@ export function Sidebar({ user, onSignOut }: SidebarProps) {
     }`}>
       {/* Logo */}
       <div className="flex items-center gap-3 px-6 py-5 border-b border-zinc-800">
-        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-sky-500/10">
-          <span className="text-sky-400 font-bold text-lg">k</span>
+        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-900 overflow-hidden">
+          <Image src="/logo.png" alt="koachr" width={36} height={36} />
         </div>
         <div>
           <span className="text-white font-semibold text-sm">koachr</span>
