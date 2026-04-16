@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 interface AudioRecorderProps {
   onRecorded: (blob: Blob, durationSeconds: number) => void;
