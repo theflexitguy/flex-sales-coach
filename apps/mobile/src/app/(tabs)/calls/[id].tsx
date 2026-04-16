@@ -216,14 +216,44 @@ export default function CallDetailScreen() {
     }
   }, [currentUtteranceIndex]);
 
-  // Seek audio and pause auto-follow so it doesn't fight the jump
+  // Seek audio and scroll to the matching utterance
   const seekToTimestamp = useCallback(async (ms: number) => {
-    setAutoFollow(false);
-    setUserScrolledAway(true);
     lastAutoScrollIndex.current = -1;
     await audioPlayer.seekTo(ms);
     if (!audioPlayer.isPlaying) audioPlayer.play();
-  }, [audioPlayer]);
+
+    // Find the utterance at this timestamp and scroll to it
+    const idx = data?.transcript.utterances.findIndex(
+      (u, i, arr) => {
+        const next = arr[i + 1];
+        return ms >= u.startMs && (!next || ms < next.startMs);
+      }
+    ) ?? -1;
+
+    if (idx >= 0) {
+      const localY = utteranceYPositions.current[idx];
+      if (localY != null) {
+        isAutoScrolling.current = true;
+        const absoluteY = transcriptSectionY.current + localY;
+        scrollViewRef.current?.scrollTo({ y: absoluteY - 120, animated: true });
+        setTimeout(() => { isAutoScrolling.current = false; }, 500);
+      } else {
+        // Utterance not rendered yet — scroll to transcript section first
+        scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: false });
+        setTimeout(() => {
+          const retryY = utteranceYPositions.current[idx];
+          if (retryY != null) {
+            isAutoScrolling.current = true;
+            scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + retryY - 120, animated: true });
+            setTimeout(() => { isAutoScrolling.current = false; }, 500);
+          }
+        }, 400);
+      }
+    }
+
+    setAutoFollow(true);
+    setUserScrolledAway(false);
+  }, [audioPlayer, data?.transcript.utterances]);
 
   function fetchData() {
     setLoading(true);
