@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect } from "react";
+import { create } from "zustand";
 import { apiGet, apiPost, apiPatch } from "../services/api";
 
 interface Notification {
@@ -11,39 +12,57 @@ interface Notification {
   createdAt: string;
 }
 
-export function useNotifications() {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+interface NotificationState {
+  notifications: Notification[];
+  unreadCount: number;
+  fetch: () => Promise<void>;
+  markAllRead: () => Promise<void>;
+  clearAll: () => Promise<void>;
+}
 
-  const fetch_ = useCallback(async () => {
+const useNotificationStore = create<NotificationState>((set) => ({
+  notifications: [],
+  unreadCount: 0,
+
+  fetch: async () => {
     try {
       const data = await apiGet<{ notifications: Notification[]; unreadCount: number }>("/api/notifications");
-      setNotifications(data.notifications);
-      setUnreadCount(data.unreadCount);
+      set({ notifications: data.notifications, unreadCount: data.unreadCount });
     } catch { /* ignore */ }
-  }, []);
+  },
 
-  useEffect(() => {
-    fetch_();
-    const interval = setInterval(fetch_, 30000);
-    return () => clearInterval(interval);
-  }, [fetch_]);
-
-  const markAllRead = useCallback(async () => {
+  markAllRead: async () => {
     try {
       await apiPatch("/api/notifications", { markAllRead: true });
-      setUnreadCount(0);
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      set((s) => ({
+        unreadCount: 0,
+        notifications: s.notifications.map((n) => ({ ...n, read: true })),
+      }));
     } catch { /* ignore */ }
-  }, []);
+  },
 
-  const clearAll = useCallback(async () => {
+  clearAll: async () => {
     try {
       await apiPost("/api/notifications/clear", {});
-      setNotifications([]);
-      setUnreadCount(0);
+      set({ notifications: [], unreadCount: 0 });
     } catch { /* ignore */ }
+  },
+}));
+
+export function useNotifications() {
+  const store = useNotificationStore();
+
+  useEffect(() => {
+    store.fetch();
+    const interval = setInterval(store.fetch, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  return { notifications, unreadCount, refresh: fetch_, markAllRead, clearAll };
+  return {
+    notifications: store.notifications,
+    unreadCount: store.unreadCount,
+    refresh: store.fetch,
+    markAllRead: store.markAllRead,
+    clearAll: store.clearAll,
+  };
 }
