@@ -84,7 +84,7 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
     formData.append("content", content.trim());
     if (anchorTime) formData.append("timestampMs", String(Math.round(currentTimeMs)));
     if (audioBlob) {
-      formData.append("audio", audioBlob, "note.webm");
+      formData.append("audio", audioBlob, `note.${audioBlob.type.includes("mp4") ? "m4a" : "webm"}`);
       formData.append("audioDuration", String(audioDuration));
     }
     if (mentionEveryone) {

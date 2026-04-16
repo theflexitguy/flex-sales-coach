@@ -751,8 +751,9 @@ function HelpRequestReplyForm({
     // Upload audio first if present
     let audioUrl: string | null = null;
     if (audioBlob) {
+      const ext = audioBlob.type.includes("mp4") ? "m4a" : "webm";
       const uploadForm = new FormData();
-      uploadForm.append("audio", audioBlob, "reply.webm");
+      uploadForm.append("audio", audioBlob, `reply.${ext}`);
       const uploadRes = await fetch("/api/audio-upload", { method: "POST", body: uploadForm });
       const uploadData = await uploadRes.json();
       audioUrl = uploadData.audioUrl ?? null;
@@ -773,7 +774,7 @@ function HelpRequestReplyForm({
     formData.append("content", content.trim() || (audioBlob ? "Audio note" : ""));
     formData.append("timestampMs", String(timestampMs));
     if (audioBlob) {
-      formData.append("audio", audioBlob, "note.webm");
+      formData.append("audio", audioBlob, `note.${audioBlob.type.includes("mp4") ? "m4a" : "webm"}`);
       formData.append("audioDuration", String(audioDuration));
     }
     await fetch(`/api/calls/${callId}/notes`, {
@@ -855,11 +856,16 @@ function CompactAudioRecorder({
 
   function start() {
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const mr = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
-      });
+      const mp4Types = [
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4;codecs=aac",
+        "audio/mp4",
+        "audio/aac",
+      ];
+      const mp4Type = mp4Types.find((t) => MediaRecorder.isTypeSupported(t));
+      const mimeType = mp4Type
+        ?? (MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm");
+      const mr = new MediaRecorder(stream, { mimeType });
       chunksRef.current = [];
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.onstop = () => {

@@ -18,12 +18,16 @@ export function AudioRecorder({ onRecorded, disabled }: AudioRecorderProps) {
   const start = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Prefer MP4/AAC for cross-platform compatibility (mobile can't play WebM)
-      const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
-        ? "audio/mp4"
-        : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm";
+      // Must record as MP4/AAC for cross-platform compat (mobile can't play WebM)
+      const mp4Types = [
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4;codecs=aac",
+        "audio/mp4",
+        "audio/aac",
+      ];
+      const mp4Type = mp4Types.find((t) => MediaRecorder.isTypeSupported(t));
+      const mimeType = mp4Type
+        ?? (MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm");
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
 
       chunksRef.current = [];
