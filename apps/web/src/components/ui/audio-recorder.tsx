@@ -107,14 +107,11 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationSeconds ?? 0);
-  const containerRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animRef = useRef<number>(0);
 
-  // Get audio element ref after mount
-  useEffect(() => {
-    const el = containerRef.current?.querySelector("audio") as HTMLAudioElement | null;
-    if (el) audioRef.current = el;
+  const setAudioRef = useCallback((el: HTMLAudioElement | null) => {
+    audioRef.current = el;
   }, []);
 
   function tick() {
@@ -169,14 +166,9 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   };
 
   return (
-    <div ref={containerRef} className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
+    <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
       {/* Hidden native audio element handles format detection and decoding */}
-      <audio preload="metadata" onLoadedMetadata={handleMetadata} onEnded={handleEnded} style={{ display: "none" }}>
-        <source src={url} type="audio/mp4" />
-        <source src={url} type="audio/x-m4a" />
-        <source src={url} type="audio/webm" />
-        <source src={url} />
-      </audio>
+      <audio ref={setAudioRef} preload="metadata" src={url} onLoadedMetadata={handleMetadata} onEnded={handleEnded} style={{ display: "none" }} />
       <button onClick={toggle} className="shrink-0 w-6 h-6 rounded-full bg-sky-500 flex items-center justify-center hover:bg-sky-400 transition-colors">
         {playing ? (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>

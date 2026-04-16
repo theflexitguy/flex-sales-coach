@@ -8,22 +8,54 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const formData = await request.formData();
-  const sessionId = formData.get("sessionId") as string;
-  const chunkIndex = parseInt(formData.get("chunkIndex") as string, 10);
-  const durationSeconds = parseInt(formData.get("durationSeconds") as string ?? "0", 10);
-  const latitude = formData.get("latitude") ? parseFloat(formData.get("latitude") as string) : null;
-  const longitude = formData.get("longitude") ? parseFloat(formData.get("longitude") as string) : null;
-  const audioFile = formData.get("audio") as File | null;
+  const contentType = request.headers.get("content-type") ?? "";
+  let sessionId: string;
+  let chunkIndex: number;
+  let storagePath: string;
+  let durationSeconds: number;
+  let latitude: number | null = null;
+  let longitude: number | null = null;
 
-  if (!sessionId || isNaN(chunkIndex) || !audioFile) {
-    return NextResponse.json({
-      error: `Missing fields: sessionId=${!!sessionId}, chunkIndex=${chunkIndex}, audio=${!!audioFile}, audioSize=${audioFile?.size ?? 0}`,
-    }, { status: 400 });
+  if (contentType.includes("application/json")) {
+    // New flow: mobile uploaded directly to Supabase storage, sends metadata only
+    const body = await request.json();
+    sessionId = body.sessionId;
+    chunkIndex = body.chunkIndex;
+    storagePath = body.storagePath;
+    durationSeconds = body.durationSeconds ?? 0;
+    latitude = body.latitude ?? null;
+    longitude = body.longitude ?? null;
+  } else {
+    // Legacy flow: file included in FormData (web or older mobile clients)
+    const formData = await request.formData();
+    sessionId = formData.get("sessionId") as string;
+    chunkIndex = parseInt(formData.get("chunkIndex") as string, 10);
+    durationSeconds = parseInt(formData.get("durationSeconds") as string ?? "0", 10);
+    latitude = formData.get("latitude") ? parseFloat(formData.get("latitude") as string) : null;
+    longitude = formData.get("longitude") ? parseFloat(formData.get("longitude") as string) : null;
+    const audioFile = formData.get("audio") as File | null;
+
+    if (!audioFile || audioFile.size === 0) {
+      return NextResponse.json({ error: "Audio file missing or empty" }, { status: 400 });
+    }
+
+    // Upload to storage from server
+    const admin = createAdmin();
+    storagePath = `${sessionId}/${chunkIndex}.m4a`;
+    const { error: uploadError } = await admin.storage
+      .from("recording-chunks")
+      .upload(storagePath, audioFile, {
+        contentType: audioFile.type || "audio/mp4",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
+    }
   }
 
-  if (audioFile.size === 0) {
-    return NextResponse.json({ error: "Audio file is empty (0 bytes)" }, { status: 400 });
+  if (!sessionId || isNaN(chunkIndex)) {
+    return NextResponse.json({ error: "Missing sessionId or chunkIndex" }, { status: 400 });
   }
 
   const admin = createAdmin();
@@ -37,22 +69,6 @@ export async function POST(request: Request) {
 
   if (!session || session.rep_id !== auth.user.id) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
-  }
-
-  // Upload chunk to storage
-  const storagePath = `${sessionId}/${chunkIndex}.m4a`;
-  const { error: uploadError } = await admin.storage
-    .from("recording-chunks")
-    .upload(storagePath, audioFile, {
-      contentType: audioFile.type || "audio/mp4",
-      upsert: true,
-    });
-
-  if (uploadError) {
-    return NextResponse.json(
-      { error: `Upload failed: ${uploadError.message}` },
-      { status: 500 }
-    );
   }
 
   // Create chunk record

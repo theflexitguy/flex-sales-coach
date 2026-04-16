@@ -169,24 +169,38 @@ class UploadQueue {
       throw new Error("No auth session");
     }
 
-    const formData = new FormData();
-    formData.append("sessionId", job.sessionId);
-    formData.append("chunkIndex", String(job.chunkIndex));
-    formData.append("durationSeconds", String(job.durationSeconds));
-    if (job.latitude != null) formData.append("latitude", String(job.latitude));
-    if (job.longitude != null) formData.append("longitude", String(job.longitude));
-    formData.append("audio", {
+    // Step 1: Upload audio directly to Supabase storage (bypasses Vercel body limit)
+    const storagePath = `${job.sessionId}/${job.chunkIndex}.m4a`;
+    const uploadForm = new FormData();
+    uploadForm.append("", {
       uri: job.uri,
-      name: `chunk_${job.chunkIndex}.m4a`,
+      name: `${job.chunkIndex}.m4a`,
       type: "audio/mp4",
     } as unknown as Blob);
 
+    const { error: uploadError } = await supabase.storage
+      .from("recording-chunks")
+      .upload(storagePath, uploadForm, { contentType: "multipart/form-data", upsert: true });
+
+    if (uploadError) {
+      throw new Error(`Storage upload: ${uploadError.message}`);
+    }
+
+    // Step 2: Register the chunk metadata via lightweight API call (no file body)
     const res = await fetch(`${API_BASE_URL}/api/sessions/chunk`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
       },
-      body: formData,
+      body: JSON.stringify({
+        sessionId: job.sessionId,
+        chunkIndex: job.chunkIndex,
+        storagePath,
+        durationSeconds: job.durationSeconds,
+        latitude: job.latitude,
+        longitude: job.longitude,
+      }),
     });
 
     if (!res.ok) {
