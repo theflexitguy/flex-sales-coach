@@ -147,7 +147,7 @@ export default function RoleplaySessionScreen() {
           <TouchableOpacity
             style={styles.startBtn}
             onPress={() => {
-              haptic("medium");
+              haptic.medium();
               startSession(scenarioId);
             }}
             activeOpacity={0.8}
@@ -199,7 +199,7 @@ export default function RoleplaySessionScreen() {
           <TouchableOpacity
             style={styles.endBtn}
             onPress={() => {
-              haptic("heavy");
+              haptic.heavy();
               Alert.alert("End Session", "Ready to wrap up?", [
                 { text: "Keep Going", style: "cancel" },
                 { text: "End & Review", style: "destructive", onPress: endSession },
