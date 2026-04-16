@@ -1,10 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { AudioModule, setAudioModeAsync } from "expo-audio";
-import type { AudioStatus } from "expo-audio";
-
-type Player = InstanceType<typeof AudioModule.AudioPlayer>;
+import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 
 interface VoiceNotePlayerProps {
   audioUrl: string;
@@ -12,59 +9,19 @@ interface VoiceNotePlayerProps {
 }
 
 export function VoiceNotePlayer({ audioUrl, authorName }: VoiceNotePlayerProps) {
-  const playerRef = useRef<Player | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [positionS, setPositionS] = useState(0);
-  const [durationS, setDurationS] = useState(0);
-
-  useEffect(() => {
-    const p = new (AudioModule.AudioPlayer as unknown as new (
-      s: { uri: string },
-      interval: number,
-      keep: boolean
-    ) => Player)({ uri: audioUrl }, 250, false);
-
-    playerRef.current = p;
-
-    const sub = p.addListener("playbackStatusUpdate", (s: AudioStatus) => {
-      setPlaying(s.playing ?? false);
-      setPositionS(s.currentTime ?? 0);
-      setDurationS(s.duration ?? 0);
-      if (s.didJustFinish) {
-        p.seekTo(0);
-      }
-    });
-
-    return () => {
-      sub.remove();
-      try { p.pause(); p.remove(); } catch { /* ignore */ }
-      playerRef.current = null;
-    };
-  }, [audioUrl]);
-
-  const togglePlay = useCallback(async () => {
-    const p = playerRef.current;
-    if (!p) return;
-    if (p.playing) {
-      p.pause();
-    } else {
-      // Ensure audio mode is set for playback (recording may have changed it)
-      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false });
-      p.play();
-    }
-  }, []);
+  const player = useAudioPlayer(audioUrl);
 
   const fmt = (s: number) => {
-    const sec = Math.floor(s);
+    const sec = Math.floor(s / 1000);
     return `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, "0")}`;
   };
 
-  const progress = durationS > 0 ? positionS / durationS : 0;
+  const progress = player.durationMs > 0 ? player.positionMs / player.durationMs : 0;
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity onPress={togglePlay} style={styles.playBtn}>
-        <Ionicons name={playing ? "pause" : "play"} size={14} color="#fff" />
+      <TouchableOpacity onPress={player.togglePlay} style={styles.playBtn}>
+        <Ionicons name={player.isPlaying ? "pause" : "play"} size={14} color="#fff" />
       </TouchableOpacity>
       <View style={styles.trackArea}>
         <View style={styles.trackBg}>
@@ -73,7 +30,7 @@ export function VoiceNotePlayer({ audioUrl, authorName }: VoiceNotePlayerProps) 
         <View style={styles.meta}>
           <Text style={styles.author}>{authorName}</Text>
           <Text style={styles.time}>
-            {fmt(positionS)}{durationS > 0 ? ` / ${fmt(durationS)}` : ""}
+            {fmt(player.positionMs)}{player.durationMs > 0 ? ` / ${fmt(player.durationMs)}` : ""}
           </Text>
         </View>
       </View>

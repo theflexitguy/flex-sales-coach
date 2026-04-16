@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireAuth } from "@/lib/auth";
 import { createServer } from "@/lib/supabase-server";
+import { createAdmin } from "@flex/supabase/admin";
 import type { TranscriptUtterance } from "@flex/shared";
 import { CallDetailClient } from "@/components/calls/call-detail-client";
 import { CallChat } from "@/components/calls/chat/call-chat";
@@ -39,8 +40,27 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     supabase.from("call_sections").select("*").eq("call_id", id).order("order_index"),
     supabase.from("objections").select("*").eq("call_id", id),
     supabase.from("coaching_notes").select("*").eq("call_id", id).order("created_at"),
-    supabase.from("help_requests").select("*, help_request_responses(*)").eq("call_id", id).order("created_at"),
+    supabase.from("help_requests").select("*").eq("call_id", id).order("created_at"),
   ]);
+
+  // Fetch help request responses with admin client to avoid nested RLS issues
+  const admin = createAdmin();
+  const helpRequestIds = (rawHelpRequests ?? []).map((h: { id: string }) => h.id);
+  let helpResponses: Array<Record<string, unknown>> = [];
+  if (helpRequestIds.length > 0) {
+    const { data } = await admin
+      .from("help_request_responses")
+      .select("*")
+      .in("request_id", helpRequestIds)
+      .order("created_at");
+    helpResponses = data ?? [];
+  }
+  const responsesByRequest = new Map<string, Array<Record<string, unknown>>>();
+  for (const r of helpResponses) {
+    const key = r.request_id as string;
+    if (!responsesByRequest.has(key)) responsesByRequest.set(key, []);
+    responsesByRequest.get(key)!.push(r);
+  }
 
   // Get signed audio URL
   let audioUrl: string | null = null;
@@ -52,12 +72,10 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
   }
 
   // Get note + help-request author names
-  const helpRequestAuthorIds = (rawHelpRequests ?? []).flatMap(
-    (hr: { rep_id: string; help_request_responses: Array<{ author_id: string }> }) => [
-      hr.rep_id,
-      ...(hr.help_request_responses ?? []).map((r) => r.author_id),
-    ]
-  );
+  const helpRequestAuthorIds = [
+    ...(rawHelpRequests ?? []).map((hr: { rep_id: string }) => hr.rep_id),
+    ...helpResponses.map((r) => r.author_id as string),
+  ];
   const authorIds = [...new Set([
     ...(rawNotes ?? []).map((n: { author_id: string }) => n.author_id),
     ...helpRequestAuthorIds,
@@ -146,11 +164,6 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
         id: string; rep_id: string; status: string; transcript_excerpt: string;
         start_ms: number; end_ms: number; message: string | null;
         created_at: string; updated_at: string;
-        help_request_responses: Array<{
-          id: string; author_id: string; content: string;
-          audio_url: string | null; audio_duration_s: number | null;
-          created_at: string;
-        }>;
       }) => ({
         id: hr.id,
         repName: authorMap[hr.rep_id] ?? "Rep",
@@ -160,12 +173,12 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
         endMs: hr.end_ms,
         message: hr.message,
         createdAt: hr.created_at,
-        responses: (hr.help_request_responses ?? []).map((r) => ({
-          id: r.id,
-          authorName: authorMap[r.author_id] ?? "Manager",
-          content: r.content,
-          audioUrl: r.audio_url,
-          createdAt: r.created_at,
+        responses: (responsesByRequest.get(hr.id) ?? []).map((r) => ({
+          id: r.id as string,
+          authorName: authorMap[r.author_id as string] ?? "Manager",
+          content: r.content as string,
+          audioUrl: r.audio_url as string | null,
+          createdAt: r.created_at as string,
         })),
       }))}
     />

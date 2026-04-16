@@ -71,14 +71,18 @@ export function VoiceNoteRecorder({ onRecorded, storagePath }: VoiceNoteRecorder
 
       if (!uri) throw new Error("No recording URI");
 
-      // Upload to Supabase storage
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      // Upload to Supabase storage using FormData (reliable on React Native)
       const fileName = `${storagePath}/${Date.now()}.m4a`;
+      const formData = new FormData();
+      formData.append("", {
+        uri,
+        name: fileName,
+        type: "audio/mp4",
+      } as unknown as Blob);
 
       const { error } = await supabase.storage
         .from("audio-notes")
-        .upload(fileName, blob, { contentType: "audio/mp4" });
+        .upload(fileName, formData, { contentType: "multipart/form-data" });
 
       if (error) throw error;
 
