@@ -213,6 +213,17 @@ export default function CallDetailScreen() {
       const absoluteY = transcriptSectionY.current + localY;
       scrollViewRef.current?.scrollTo({ y: absoluteY - 120, animated: true });
       setTimeout(() => { isAutoScrolling.current = false; }, 400);
+    } else {
+      // Position not available — scroll to transcript section, then retry
+      scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: false });
+      setTimeout(() => {
+        const retryY = utteranceYPositions.current[currentUtteranceIndex];
+        if (retryY != null) {
+          isAutoScrolling.current = true;
+          scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + retryY - 120, animated: true });
+          setTimeout(() => { isAutoScrolling.current = false; }, 400);
+        }
+      }, 300);
     }
   }, [currentUtteranceIndex]);
 
@@ -273,37 +284,15 @@ export default function CallDetailScreen() {
     if (data?.helpRequests) setLocalHelpRequests(data.helpRequests);
   }, [data?.helpRequests]);
 
-  // Auto-seek to timestamp and scroll to that spot in transcript
+  // Auto-seek to timestamp — just call seekToTimestamp like tapping in the transcript
   const seekKey = `${id}-${seekMsParam}`;
   useEffect(() => {
-    if (initialSeekMs != null && data?.call.audioUrl && didInitialSeek.current !== seekKey) {
+    if (initialSeekMs != null && data && didInitialSeek.current !== seekKey) {
       didInitialSeek.current = seekKey;
-
-      // Step 1: Scroll to the transcript section so utterances render and populate positions
-      scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: false });
-
-      // Step 2: After positions are populated, scroll to the exact utterance and start playing
-      setTimeout(() => {
-        audioPlayer.seekTo(initialSeekMs);
-        audioPlayer.play();
-
-        const idx = data?.transcript.utterances.findIndex(
-          (u) => u.startMs >= initialSeekMs
-        ) ?? -1;
-        const localY = utteranceYPositions.current[idx];
-        if (localY != null) {
-          const absoluteY = transcriptSectionY.current + localY;
-          isAutoScrolling.current = true;
-          scrollViewRef.current?.scrollTo({ y: absoluteY - 120, animated: true });
-          setTimeout(() => { isAutoScrolling.current = false; }, 500);
-        }
-
-        // Enable auto-follow so the transcript keeps scrolling with playback
-        setAutoFollow(true);
-        setUserScrolledAway(false);
-      }, 800);
+      // Delay to let the page render and populate utterance positions
+      setTimeout(() => seekToTimestamp(initialSeekMs), 800);
     }
-  }, [data?.call.audioUrl, initialSeekMs, seekKey]);
+  }, [data, initialSeekMs, seekKey, seekToTimestamp]);
 
   if (loading) return <SkeletonList count={6} />;
 
