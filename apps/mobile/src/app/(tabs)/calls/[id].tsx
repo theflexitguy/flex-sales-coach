@@ -28,6 +28,7 @@ import { ErrorState } from "../../../components/ui/error-state";
 import { haptic } from "../../../lib/haptics";
 import { apiGet, apiPost } from "../../../services/api";
 import { reverseGeocode } from "../../../services/location";
+import { VoiceNoteRecorder } from "../../../components/calls/voice-note-recorder";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e",
@@ -477,10 +478,35 @@ export default function CallDetailScreen() {
         </View>
       )}
 
-      {/* Coaching Notes */}
+      {/* Coaching Notes — includes help requests + responses + manual notes */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Coaching Notes</Text>
         <AddNoteForm callId={call.id} currentTimeMs={audioPlayer.positionMs} />
+
+        {/* Help requests as coaching items */}
+        {localHelpRequests.map((h) => (
+          <View key={`help-${h.id}`} style={[styles.noteCard, { borderLeftWidth: 3, borderLeftColor: "#f59e0b" }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Ionicons name="hand-left" size={12} color="#f59e0b" />
+                <Text style={[styles.noteAuthor, { color: "#f59e0b" }]}>Help Request</Text>
+              </View>
+              <Text style={{ color: "#52525b", fontSize: 11 }}>@ {formatMs(h.startMs)}</Text>
+            </View>
+            <Text style={styles.noteContent} numberOfLines={2}>"{h.transcriptExcerpt}"</Text>
+            {h.message && <Text style={{ color: "#d4d4d8", fontSize: 13, marginTop: 2 }}>{h.message}</Text>}
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
+              <View style={[styles.statusBadge, { backgroundColor: h.status === "responded" ? "rgba(34,197,94,0.1)" : "rgba(245,158,11,0.1)" }]}>
+                <Text style={{ color: h.status === "responded" ? "#22c55e" : "#f59e0b", fontSize: 11, fontWeight: "500", textTransform: "capitalize" }}>{h.status}</Text>
+              </View>
+              <TouchableOpacity onPress={() => seekToTimestamp(h.startMs)}>
+                <Text style={{ color: "#35b2ff", fontSize: 12 }}>Jump to spot</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+
+        {/* Regular coaching notes */}
         {notes.map((n) => (
           <View key={n.id} style={styles.noteCard}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -529,12 +555,33 @@ export default function CallDetailScreen() {
                           multiline
                           autoFocus
                         />
+                        <VoiceNoteRecorder
+                          storagePath={`help-responses/${matchingHelp.id}`}
+                          onRecorded={async (audioUrl) => {
+                            setSendingReply(true);
+                            try {
+                              await apiPost(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
+                                content: replyText.trim() || "Voice note",
+                                audioUrl,
+                              });
+                              setReplyingTo(null);
+                              setReplyText("");
+                              setLocalHelpRequests((prev) =>
+                                prev.map((h) => h.id === matchingHelp.id ? { ...h, status: "responded" } : h)
+                              );
+                              haptic.success();
+                            } catch {
+                              Alert.alert("Error", "Failed to send response");
+                            }
+                            setSendingReply(false);
+                          }}
+                        />
                         <View style={styles.replyActions}>
                           <TouchableOpacity onPress={() => { setReplyingTo(null); setReplyText(""); }}>
                             <Text style={{ color: "#71717a", fontSize: 13 }}>Cancel</Text>
                           </TouchableOpacity>
                           <TouchableOpacity
-                            style={[styles.replySendBtn, sendingReply && { opacity: 0.5 }]}
+                            style={[styles.replySendBtn, (sendingReply || !replyText.trim()) && { opacity: 0.5 }]}
                             disabled={sendingReply || !replyText.trim()}
                             onPress={async () => {
                               setSendingReply(true);
@@ -544,7 +591,6 @@ export default function CallDetailScreen() {
                                 });
                                 setReplyingTo(null);
                                 setReplyText("");
-                                // Update local state to show responded
                                 setLocalHelpRequests((prev) =>
                                   prev.map((h) => h.id === matchingHelp.id ? { ...h, status: "responded" } : h)
                                 );
@@ -556,7 +602,7 @@ export default function CallDetailScreen() {
                             }}
                           >
                             <Ionicons name="send" size={14} color="#000" />
-                            <Text style={styles.replySendText}>{sendingReply ? "Sending..." : "Send"}</Text>
+                            <Text style={styles.replySendText}>{sendingReply ? "Sending..." : "Send Text"}</Text>
                           </TouchableOpacity>
                         </View>
                       </View>
@@ -906,6 +952,7 @@ const styles = StyleSheet.create({
   replyActions: { flexDirection: "row" as const, justifyContent: "space-between" as const, alignItems: "center" as const },
   replySendBtn: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, backgroundColor: "#35b2ff", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   replySendText: { color: "#000", fontSize: 13, fontWeight: "600" as const },
+  statusBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
   transcriptHint: { color: "#52525b", fontSize: 12, marginBottom: 8, fontStyle: "italic" },
   // Help request modal
   helpModalOverlay: { flex: 1 },
