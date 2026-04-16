@@ -12,7 +12,7 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    initialize().then(() => setReady(true));
+    initialize().then(() => setReady(true)).catch(() => setReady(true));
     uploadQueue.restore();
   }, []);
 
