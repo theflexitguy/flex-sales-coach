@@ -25,6 +25,7 @@ interface ObjectionItem {
   repResponse: string;
   handlingGrade: string;
   suggestion: string;
+  startMs: number | null;
   repName: string;
   customerName: string;
 }
@@ -110,7 +111,7 @@ export function ObjectionLibrary() {
               </Text>
             </View>
             <View style={styles.actions}>
-              <TouchableOpacity onPress={() => router.push(`/(tabs)/calls/${item.callId}`)}>
+              <TouchableOpacity onPress={() => router.push(`/(tabs)/calls/${item.callId}${item.startMs != null ? `?seekMs=${item.startMs}` : ""}`)}>
                 <Text style={styles.actionLink}>Listen</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => loadExamples(item.category)}>

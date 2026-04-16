@@ -13,6 +13,7 @@ interface HelpRequestItem {
   status: string;
   transcriptExcerpt: string;
   message: string | null;
+  startMs: number | null;
   createdAt: string;
   repName: string;
 }
@@ -56,7 +57,7 @@ export default function CoachingScreen() {
       renderItem={({ item }) => (
         <TouchableOpacity
           style={styles.card}
-          onPress={() => router.push(`/(tabs)/calls/${item.callId}`)}
+          onPress={() => router.push(`/(tabs)/calls/${item.callId}${item.startMs != null ? `?seekMs=${item.startMs}` : ""}`)}
         >
           <View style={styles.cardHeader}>
             <View style={[styles.statusDot, { backgroundColor: STATUS_COLORS[item.status] ?? "#71717a" }]} />

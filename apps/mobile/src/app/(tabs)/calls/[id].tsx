@@ -99,7 +99,9 @@ interface CallDetail {
 }
 
 export default function CallDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, seekMs: seekMsParam } = useLocalSearchParams<{ id: string; seekMs?: string }>();
+  const initialSeekMs = seekMsParam ? parseInt(seekMsParam, 10) : null;
+  const didInitialSeek = useRef(false);
   const [data, setData] = useState<CallDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
@@ -214,7 +216,17 @@ export default function CallDetailScreen() {
     fetchData();
   }, [id]);
 
-  // Audio player is now handled by useAudioPlayer hook
+  // Auto-seek to timestamp when navigating from objections/coaching
+  useEffect(() => {
+    if (initialSeekMs != null && data?.call.audioUrl && !didInitialSeek.current) {
+      didInitialSeek.current = true;
+      // Small delay to let the player initialize
+      setTimeout(() => {
+        audioPlayer.seekTo(initialSeekMs);
+        audioPlayer.play();
+      }, 500);
+    }
+  }, [data?.call.audioUrl, initialSeekMs]);
 
   if (loading) return <SkeletonList count={6} />;
 
