@@ -21,7 +21,9 @@ export async function getVisibleRepIds(managerId: string, teamId: string): Promi
       .eq("is_active", true),
   ]);
 
+  // Include manager's own ID so they can see their own data (e.g., help requests they submitted)
   const allRepIds = (allReps ?? []).map((r) => r.id);
+  if (!allRepIds.includes(managerId)) allRepIds.push(managerId);
 
   // If no assignments exist on this team at all, show everything (backward compat)
   if (!assignments || assignments.length === 0) {
