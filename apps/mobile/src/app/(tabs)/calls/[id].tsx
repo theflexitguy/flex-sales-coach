@@ -229,14 +229,16 @@ export default function CallDetailScreen() {
 
   // Seek audio and scroll to the matching utterance
   const seekToTimestamp = useCallback(async (ms: number) => {
+    // Seek audio
+    await audioPlayer.seekTo(ms);
+    if (!audioPlayer.isPlaying) audioPlayer.play();
+
+    // Reset auto-follow so the existing playback tracker handles scrolling
     lastAutoScrollIndex.current = -1;
     setAutoFollow(true);
     setUserScrolledAway(false);
 
-    await audioPlayer.seekTo(ms);
-    if (!audioPlayer.isPlaying) audioPlayer.play();
-
-    // Scroll to the matching utterance — try measured position first
+    // Try to scroll to the exact utterance if position is known
     const utterances = data?.transcript.utterances ?? [];
     const idx = utterances.findIndex(
       (u, i, arr) => {
@@ -245,34 +247,21 @@ export default function CallDetailScreen() {
       }
     );
 
-    if (idx < 0) return;
-
-    const scrollToUtterance = () => {
+    if (idx >= 0) {
       const localY = utteranceYPositions.current[idx];
       if (localY != null) {
         isAutoScrolling.current = true;
         scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + localY - 120, animated: true });
         setTimeout(() => { isAutoScrolling.current = false; }, 500);
-        return true;
+        return;
       }
-      return false;
-    };
-
-    // If position is already known, scroll immediately
-    if (scrollToUtterance()) return;
-
-    // Otherwise, scroll to the transcript section to trigger layout, then retry multiple times
-    isAutoScrolling.current = true;
-    scrollViewRef.current?.scrollToEnd({ animated: false });
-
-    const retryTimes = [300, 600, 1000, 1500];
-    for (const delay of retryTimes) {
-      setTimeout(() => {
-        if (scrollToUtterance()) return;
-      }, delay);
     }
 
-    setTimeout(() => { isAutoScrolling.current = false; }, 2000);
+    // Position not known — just scroll to the transcript section.
+    // Auto-follow will take over once the utterance renders and becomes the currentUtteranceIndex.
+    isAutoScrolling.current = true;
+    scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: true });
+    setTimeout(() => { isAutoScrolling.current = false; }, 500);
   }, [audioPlayer, data?.transcript.utterances]);
 
   function fetchData() {
