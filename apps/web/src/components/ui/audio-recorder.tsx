@@ -102,33 +102,79 @@ interface AudioPlaybackProps {
 
 export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(durationSeconds ?? 0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const animRef = useRef<number>(0);
+
+  function ensureAudio() {
+    if (audioRef.current) return audioRef.current;
+    const a = new Audio(url);
+    a.onended = () => { setPlaying(false); setProgress(0); setCurrentTime(0); };
+    a.onloadedmetadata = () => { if (a.duration && isFinite(a.duration)) setDuration(a.duration); };
+    audioRef.current = a;
+    return a;
+  }
+
+  function tick() {
+    const a = audioRef.current;
+    if (a && !a.paused) {
+      const d = a.duration || duration || 1;
+      setProgress(a.currentTime / d);
+      setCurrentTime(a.currentTime);
+      animRef.current = requestAnimationFrame(tick);
+    }
+  }
 
   const toggle = () => {
-    if (!audioRef.current) {
-      audioRef.current = new Audio(url);
-      audioRef.current.onended = () => setPlaying(false);
-    }
+    const a = ensureAudio();
     if (playing) {
-      audioRef.current.pause();
+      a.pause();
+      cancelAnimationFrame(animRef.current);
       setPlaying(false);
     } else {
-      audioRef.current.play();
+      a.play();
+      animRef.current = requestAnimationFrame(tick);
       setPlaying(true);
     }
   };
 
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = ensureAudio();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const d = a.duration && isFinite(a.duration) ? a.duration : duration;
+    if (d > 0) {
+      a.currentTime = pct * d;
+      setProgress(pct);
+      setCurrentTime(pct * d);
+    }
+  };
+
+  const fmt = (s: number) => {
+    const sec = Math.floor(s);
+    return `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, "0")}`;
+  };
+
   return (
-    <button
-      onClick={toggle}
-      className="flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1 text-xs text-sky-400 hover:bg-sky-500/20 transition-colors"
-    >
-      {playing ? (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
-      ) : (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-      )}
-      {durationSeconds ? `${durationSeconds}s` : "Play"}
-    </button>
+    <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
+      <button onClick={toggle} className="shrink-0 w-6 h-6 rounded-full bg-sky-500 flex items-center justify-center hover:bg-sky-400 transition-colors">
+        {playing ? (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+        ) : (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><polygon points="6 3 20 12 6 21 6 3" /></svg>
+        )}
+      </button>
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="h-1 rounded-full bg-sky-500/20 cursor-pointer" onClick={handleSeek}>
+          <div className="h-full rounded-full bg-sky-400 transition-[width] duration-100" style={{ width: `${(progress * 100).toFixed(0)}%` }} />
+        </div>
+        <div className="flex justify-between">
+          <span className="text-[10px] text-sky-400/70 font-mono">{fmt(currentTime)}</span>
+          <span className="text-[10px] text-sky-400/70 font-mono">{duration > 0 ? fmt(duration) : "--:--"}</span>
+        </div>
+      </div>
+    </div>
   );
 }

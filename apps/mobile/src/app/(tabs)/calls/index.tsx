@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
+  ScrollView,
   View,
   Text,
   FlatList,
@@ -37,18 +38,41 @@ const GRADE_COLORS: Record<string, string> = {
 
 type CallsFilter = "mine" | "team" | "shared";
 
+interface TeamMember {
+  id: string;
+  fullName: string;
+  role: string;
+}
+
 export default function CallsListScreen() {
   const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
   const isManager = profile?.role === "manager";
   const [filter, setFilter] = useState<CallsFilter>("mine");
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+
+  // Load team members when switching to team view
+  const teamLoaded = useRef(false);
+  useEffect(() => {
+    if (filter === "team" && isManager && !teamLoaded.current) {
+      teamLoaded.current = true;
+      apiGet<{ members: TeamMember[] }>("/api/mobile/team-members").then((res) => {
+        setTeamMembers(res.members.filter((m) => m.role === "rep"));
+      }).catch(() => {});
+    }
+  }, [filter, isManager]);
 
   const { data, loading, refreshing, refresh } = useCachedFetch(
     `calls-list-${filter}`,
     () => apiGet<{ calls: CallItem[] }>(`/api/mobile/calls?limit=50&filter=${filter}`)
   );
 
-  const calls = data?.calls ?? [];
+  // Apply client-side rep filter when in team view
+  const allCalls = data?.calls ?? [];
+  const calls = filter === "team" && selectedRepId
+    ? allCalls.filter((c) => c.repId === selectedRepId)
+    : allCalls;
 
   function formatDuration(s: number) {
     const m = Math.floor(s / 60);
@@ -89,21 +113,42 @@ export default function CallsListScreen() {
       }
       ListHeaderComponent={
         isManager ? (
-          <View style={styles.toggleRow}>
-            <TouchableOpacity
-              style={[styles.toggleButton, filter === "mine" && styles.toggleActive]}
-              onPress={() => setFilter("mine")}
-            >
-              <Ionicons name="person" size={16} color={filter === "mine" ? "#35b2ff" : "#71717a"} />
-              <Text style={[styles.toggleText, filter === "mine" && styles.toggleTextActive]}>My Calls</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleButton, filter === "team" && styles.toggleActive]}
-              onPress={() => setFilter("team")}
-            >
-              <Ionicons name="people" size={16} color={filter === "team" ? "#35b2ff" : "#71717a"} />
-              <Text style={[styles.toggleText, filter === "team" && styles.toggleTextActive]}>Team</Text>
-            </TouchableOpacity>
+          <View>
+            <View style={styles.toggleRow}>
+              <TouchableOpacity
+                style={[styles.toggleButton, filter === "mine" && styles.toggleActive]}
+                onPress={() => { setFilter("mine"); setSelectedRepId(null); }}
+              >
+                <Ionicons name="person" size={16} color={filter === "mine" ? "#35b2ff" : "#71717a"} />
+                <Text style={[styles.toggleText, filter === "mine" && styles.toggleTextActive]}>My Calls</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.toggleButton, filter === "team" && styles.toggleActive]}
+                onPress={() => setFilter("team")}
+              >
+                <Ionicons name="people" size={16} color={filter === "team" ? "#35b2ff" : "#71717a"} />
+                <Text style={[styles.toggleText, filter === "team" && styles.toggleTextActive]}>Team</Text>
+              </TouchableOpacity>
+            </View>
+            {filter === "team" && teamMembers.length > 0 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.repFilterRow} contentContainerStyle={{ paddingHorizontal: 16, gap: 6 }}>
+                <TouchableOpacity
+                  style={[styles.repChip, !selectedRepId && styles.repChipActive]}
+                  onPress={() => setSelectedRepId(null)}
+                >
+                  <Text style={[styles.repChipText, !selectedRepId && styles.repChipTextActive]}>All Reps</Text>
+                </TouchableOpacity>
+                {teamMembers.map((m) => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[styles.repChip, selectedRepId === m.id && styles.repChipActive]}
+                    onPress={() => setSelectedRepId(selectedRepId === m.id ? null : m.id)}
+                  >
+                    <Text style={[styles.repChipText, selectedRepId === m.id && styles.repChipTextActive]}>{m.fullName}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
           </View>
         ) : null
       }
@@ -210,6 +255,21 @@ const styles = StyleSheet.create({
   },
   toggleText: { color: "#71717a", fontSize: 14, fontWeight: "500" },
   toggleTextActive: { color: "#35b2ff" },
+  repFilterRow: { paddingBottom: 4 },
+  repChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    backgroundColor: "transparent",
+  },
+  repChipActive: {
+    backgroundColor: "rgba(53,178,255,0.1)",
+    borderColor: "rgba(53,178,255,0.3)",
+  },
+  repChipText: { color: "#71717a", fontSize: 13, fontWeight: "500" },
+  repChipTextActive: { color: "#35b2ff" },
   card: {
     marginHorizontal: 16,
     marginTop: 12,
