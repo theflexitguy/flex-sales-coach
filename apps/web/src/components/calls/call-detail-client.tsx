@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AudioPlayer, seekAudio } from "./audio-player";
 import { CoachingNotesForm } from "./coaching-notes-form";
 import { OutcomeSelector } from "./outcome-selector";
+import { ShareButton } from "./share-button";
 import { AudioRecorder, AudioPlayback } from "@/components/ui/audio-recorder";
 import { GRADE_COLORS, GRADE_LABELS } from "@flex/shared";
 import type { TranscriptUtterance } from "@flex/shared";
@@ -238,7 +239,9 @@ export function CallDetailClient({
           </p>
         </div>
 
-        {analysis && (
+        <div className="flex items-center gap-3">
+          <ShareButton callId={call.id} />
+          {analysis && (
           <div className="text-right">
             <div
               className="text-4xl font-bold"
@@ -254,6 +257,7 @@ export function CallDetailClient({
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* Outcome */}
