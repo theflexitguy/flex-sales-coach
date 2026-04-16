@@ -17,7 +17,13 @@ export async function POST(request: Request) {
   const audioFile = formData.get("audio") as File | null;
 
   if (!sessionId || isNaN(chunkIndex) || !audioFile) {
-    return NextResponse.json({ error: "Missing sessionId, chunkIndex, or audio" }, { status: 400 });
+    return NextResponse.json({
+      error: `Missing fields: sessionId=${!!sessionId}, chunkIndex=${chunkIndex}, audio=${!!audioFile}, audioSize=${audioFile?.size ?? 0}`,
+    }, { status: 400 });
+  }
+
+  if (audioFile.size === 0) {
+    return NextResponse.json({ error: "Audio file is empty (0 bytes)" }, { status: 400 });
   }
 
   const admin = createAdmin();

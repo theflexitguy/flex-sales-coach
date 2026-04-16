@@ -105,43 +105,61 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationSeconds ?? 0);
+  const [error, setError] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animRef = useRef<number>(0);
 
-  function ensureAudio() {
-    if (audioRef.current) return audioRef.current;
-    const a = new Audio(url);
+  // Preload audio on mount
+  useEffect(() => {
+    const a = new Audio();
+    a.preload = "metadata";
+    a.onloadedmetadata = () => {
+      if (a.duration && isFinite(a.duration)) setDuration(a.duration);
+    };
     a.onended = () => { setPlaying(false); setProgress(0); setCurrentTime(0); };
-    a.onloadedmetadata = () => { if (a.duration && isFinite(a.duration)) setDuration(a.duration); };
+    a.onerror = () => setError(true);
+    a.src = url;
     audioRef.current = a;
-    return a;
-  }
+
+    return () => {
+      a.pause();
+      a.src = "";
+      audioRef.current = null;
+    };
+  }, [url]);
 
   function tick() {
     const a = audioRef.current;
     if (a && !a.paused) {
-      const d = a.duration || duration || 1;
+      const d = a.duration && isFinite(a.duration) ? a.duration : (duration || 1);
       setProgress(a.currentTime / d);
       setCurrentTime(a.currentTime);
       animRef.current = requestAnimationFrame(tick);
     }
   }
 
-  const toggle = () => {
-    const a = ensureAudio();
+  const toggle = async () => {
+    const a = audioRef.current;
+    if (!a) return;
     if (playing) {
       a.pause();
       cancelAnimationFrame(animRef.current);
       setPlaying(false);
     } else {
-      a.play();
-      animRef.current = requestAnimationFrame(tick);
-      setPlaying(true);
+      try {
+        await a.play();
+        animRef.current = requestAnimationFrame(tick);
+        setPlaying(true);
+        setError(false);
+      } catch {
+        setError(true);
+      }
     }
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const a = ensureAudio();
+    const a = audioRef.current;
+    if (!a) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const d = a.duration && isFinite(a.duration) ? a.duration : duration;
@@ -156,6 +174,14 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
     const sec = Math.floor(s);
     return `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, "0")}`;
   };
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-1.5 rounded-lg bg-red-500/10 border border-red-500/20 px-2.5 py-1.5 text-xs text-red-400">
+        Audio unavailable
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">

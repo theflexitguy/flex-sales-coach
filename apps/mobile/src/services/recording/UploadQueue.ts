@@ -136,7 +136,8 @@ class UploadQueue {
       await this.persist();
       this.emitStatus();
     } catch (error) {
-      console.error(`Upload failed for chunk ${job.chunkIndex}:`, error);
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error(`Upload failed for chunk ${job.chunkIndex}: ${msg}`);
 
       if (job.retries >= MAX_RETRIES) {
         this.queue.shift();
@@ -189,8 +190,15 @@ class UploadQueue {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: "Upload failed" }));
-      throw new Error(err.error ?? "Upload failed");
+      const text = await res.text().catch(() => "");
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        errMsg = parsed.error ?? errMsg;
+      } catch {
+        errMsg = text.slice(0, 200) || errMsg;
+      }
+      throw new Error(errMsg);
     }
   }
 
