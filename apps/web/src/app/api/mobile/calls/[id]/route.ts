@@ -31,12 +31,14 @@ export async function GET(
     { data: sections },
     { data: objections },
     { data: notes },
+    { data: helpRequests },
   ] = await Promise.all([
     supabase.from("transcripts").select("*").eq("call_id", id).single(),
     supabase.from("call_analyses").select("*").eq("call_id", id).single(),
     supabase.from("call_sections").select("*").eq("call_id", id).order("order_index"),
     supabase.from("objections").select("*").eq("call_id", id),
     supabase.from("coaching_notes").select("*").eq("call_id", id).order("created_at"),
+    supabase.from("help_requests").select("*").eq("call_id", id).order("created_at"),
   ]);
 
   // Get signed audio URL
@@ -111,6 +113,16 @@ export async function GET(
       timestampMs: n.timestamp_ms,
       createdAt: n.created_at,
       authorName: authorMap[n.author_id as string] ?? "Coach",
+    })),
+    helpRequests: (helpRequests ?? []).map((h: Record<string, unknown>) => ({
+      id: h.id,
+      startMs: h.start_ms,
+      endMs: h.end_ms,
+      transcriptExcerpt: h.transcript_excerpt,
+      message: h.message,
+      status: h.status,
+      repName: authorMap[h.rep_id as string] ?? "Rep",
+      createdAt: h.created_at,
     })),
   });
 }

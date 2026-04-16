@@ -96,6 +96,16 @@ interface CallDetail {
     createdAt: string;
     authorName: string;
   }>;
+  helpRequests: Array<{
+    id: string;
+    startMs: number;
+    endMs: number;
+    transcriptExcerpt: string;
+    message: string | null;
+    status: string;
+    repName: string;
+    createdAt: string;
+  }>;
 }
 
 export default function CallDetailScreen() {
@@ -242,7 +252,7 @@ export default function CallDetailScreen() {
     return <ErrorState message={fetchError ? "Failed to load call" : "Call not found"} onRetry={fetchData} />;
   }
 
-  const { call, analysis, sections, objections, transcript, notes } = data;
+  const { call, analysis, sections, objections, transcript, notes, helpRequests } = data;
 
   return (
     <>
@@ -470,53 +480,73 @@ export default function CallDetailScreen() {
         <View style={styles.section} onLayout={(e) => { transcriptSectionY.current = e.nativeEvent.layout.y; }}>
           <Text style={styles.sectionTitle}>Transcript</Text>
           <Text style={styles.transcriptHint}>Long-press any line to ask your manager for help</Text>
-          {transcript.utterances.map((u, i) => (
-            <Pressable
-              key={i}
-              onPress={() => seekToTimestamp(u.startMs)}
-              onLongPress={() => setHelpModal({ text: u.text, startMs: u.startMs, endMs: u.endMs })}
-              onLayout={(e) => {
-                utteranceYPositions.current[i] = e.nativeEvent.layout.y;
-              }}
-              style={({ pressed }) => [
-                styles.utterance,
-                pressed && styles.utterancePressed,
-                i === currentUtteranceIndex && audioPlayer.isPlaying && styles.utteranceActive,
-              ]}
-            >
-              <View
-                style={[
-                  styles.speakerBadge,
-                  {
-                    backgroundColor:
-                      u.speaker === "rep"
-                        ? "rgba(53,178,255,0.1)"
-                        : "rgba(139,92,246,0.1)",
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.speakerLabel,
-                    { color: u.speaker === "rep" ? "#35b2ff" : "#a78bfa" },
+          {transcript.utterances.map((u, i) => {
+            const matchingHelp = helpRequests.find(
+              (h) => u.startMs >= h.startMs && u.startMs <= h.endMs
+            );
+            const isHelpStart = matchingHelp && (!transcript.utterances[i - 1] || transcript.utterances[i - 1].startMs < matchingHelp.startMs);
+            return (
+              <View key={i}>
+                {isHelpStart && matchingHelp && (
+                  <View style={styles.helpRequestBanner}>
+                    <View style={styles.helpRequestHeader}>
+                      <Ionicons name="hand-left" size={14} color="#f59e0b" />
+                      <Text style={styles.helpRequestLabel}>Help Requested</Text>
+                      <Text style={styles.helpRequestStatus}>{matchingHelp.status}</Text>
+                    </View>
+                    {matchingHelp.message && (
+                      <Text style={styles.helpRequestMessage}>{matchingHelp.message}</Text>
+                    )}
+                  </View>
+                )}
+                <Pressable
+                  onPress={() => seekToTimestamp(u.startMs)}
+                  onLongPress={() => setHelpModal({ text: u.text, startMs: u.startMs, endMs: u.endMs })}
+                  onLayout={(e) => {
+                    utteranceYPositions.current[i] = e.nativeEvent.layout.y;
+                  }}
+                  style={({ pressed }) => [
+                    styles.utterance,
+                    pressed && styles.utterancePressed,
+                    i === currentUtteranceIndex && audioPlayer.isPlaying && styles.utteranceActive,
+                    matchingHelp != null && styles.utteranceHelpHighlight,
                   ]}
                 >
-                  {u.speaker === "rep" ? "R" : "C"}
-                </Text>
+                  <View
+                    style={[
+                      styles.speakerBadge,
+                      {
+                        backgroundColor:
+                          u.speaker === "rep"
+                            ? "rgba(53,178,255,0.1)"
+                            : "rgba(139,92,246,0.1)",
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.speakerLabel,
+                        { color: u.speaker === "rep" ? "#35b2ff" : "#a78bfa" },
+                      ]}
+                    >
+                      {u.speaker === "rep" ? "R" : "C"}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.speakerName,
+                        { color: u.speaker === "rep" ? "#35b2ff" : "#a78bfa" },
+                      ]}
+                    >
+                      {u.speaker === "rep" ? "Rep" : "Customer"}
+                    </Text>
+                    <Text style={styles.utteranceText}>{u.text}</Text>
+                  </View>
+                </Pressable>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text
-                  style={[
-                    styles.speakerName,
-                    { color: u.speaker === "rep" ? "#35b2ff" : "#a78bfa" },
-                  ]}
-                >
-                  {u.speaker === "rep" ? "Rep" : "Customer"}
-                </Text>
-                <Text style={styles.utteranceText}>{u.text}</Text>
-              </View>
-            </Pressable>
-          ))}
+            );
+          })}
         </View>
       )}
     </ScrollView>
@@ -778,6 +808,12 @@ const styles = StyleSheet.create({
   utteranceText: { color: "#d4d4d8", fontSize: 14, lineHeight: 20 },
   utterancePressed: { backgroundColor: "rgba(53,178,255,0.08)", borderRadius: 8 },
   utteranceActive: { backgroundColor: "rgba(53,178,255,0.06)", borderRadius: 8, borderLeftWidth: 2, borderLeftColor: "#35b2ff", paddingLeft: 8 },
+  utteranceHelpHighlight: { backgroundColor: "rgba(245,158,11,0.06)", borderLeftWidth: 2, borderLeftColor: "#f59e0b", borderRadius: 8, paddingLeft: 8 },
+  helpRequestBanner: { backgroundColor: "rgba(245,158,11,0.08)", borderWidth: 1, borderColor: "rgba(245,158,11,0.2)", borderRadius: 10, padding: 12, marginBottom: 6, gap: 6 },
+  helpRequestHeader: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
+  helpRequestLabel: { color: "#f59e0b", fontSize: 12, fontWeight: "600" as const },
+  helpRequestStatus: { color: "#71717a", fontSize: 11, textTransform: "capitalize" as const, marginLeft: "auto" as unknown as number },
+  helpRequestMessage: { color: "#d4d4d8", fontSize: 13, lineHeight: 18 },
   transcriptHint: { color: "#52525b", fontSize: 12, marginBottom: 8, fontStyle: "italic" },
   // Help request modal
   helpModalOverlay: { flex: 1 },
