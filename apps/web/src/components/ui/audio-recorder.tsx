@@ -129,6 +129,16 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
     if (a?.duration && isFinite(a.duration)) setDuration(a.duration);
   };
 
+  const handleTimeUpdate = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    // Fallback duration detection (some formats don't fire loadedmetadata reliably)
+    if (duration === 0 && a.duration && isFinite(a.duration)) setDuration(a.duration);
+    const d = a.duration && isFinite(a.duration) ? a.duration : (duration || 1);
+    setProgress(a.currentTime / d);
+    setCurrentTime(a.currentTime);
+  };
+
   const handleEnded = () => { setPlaying(false); setProgress(0); setCurrentTime(0); };
 
   const toggle = async () => {
@@ -168,7 +178,7 @@ export function AudioPlayback({ url, durationSeconds }: AudioPlaybackProps) {
   return (
     <div className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5">
       {/* Hidden native audio element handles format detection and decoding */}
-      <audio ref={setAudioRef} preload="metadata" src={url} onLoadedMetadata={handleMetadata} onEnded={handleEnded} style={{ display: "none" }} />
+      <audio ref={setAudioRef} preload="metadata" src={url} onLoadedMetadata={handleMetadata} onTimeUpdate={handleTimeUpdate} onEnded={handleEnded} style={{ position: "absolute", width: 0, height: 0, opacity: 0 }} />
       <button onClick={toggle} className="shrink-0 w-6 h-6 rounded-full bg-sky-500 flex items-center justify-center hover:bg-sky-400 transition-colors">
         {playing ? (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>

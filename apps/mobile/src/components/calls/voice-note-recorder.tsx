@@ -123,29 +123,21 @@ export function VoiceNoteRecorder({ onRecorded, storagePath }: VoiceNoteRecorder
     `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
   if (uploading) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.uploadingText}>Uploading voice note...</Text>
-      </View>
-    );
+    return <Text style={styles.uploadingText}>Uploading...</Text>;
   }
 
   if (recording) {
     return (
-      <View style={styles.container}>
-        <View style={styles.recordingRow}>
-          <View style={styles.recordingDot} />
-          <Text style={styles.recordingTime}>{formatDuration(duration)}</Text>
-        </View>
-        <View style={styles.recordingActions}>
-          <TouchableOpacity onPress={cancel} style={styles.cancelBtn}>
-            <Ionicons name="close" size={18} color="#71717a" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={stopAndUpload} style={styles.stopBtn}>
-            <Ionicons name="checkmark" size={18} color="#fff" />
-            <Text style={styles.stopBtnText}>Done</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={styles.recordingBar}>
+        <View style={styles.recordingDot} />
+        <Text style={styles.recordingTime}>{formatDuration(duration)}</Text>
+        <TouchableOpacity onPress={cancel} style={styles.cancelBtn}>
+          <Ionicons name="close" size={16} color="#71717a" />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={stopAndUpload} style={styles.stopBtn}>
+          <Ionicons name="checkmark" size={16} color="#fff" />
+          <Text style={styles.stopBtnText}>Done</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -159,14 +151,12 @@ export function VoiceNoteRecorder({ onRecorded, storagePath }: VoiceNoteRecorder
 }
 
 const styles = StyleSheet.create({
-  container: { gap: 8 },
-  recordingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#ef4444" },
-  recordingTime: { color: "#fff", fontSize: 16, fontWeight: "600", fontVariant: ["tabular-nums"] },
-  recordingActions: { flexDirection: "row", alignItems: "center", gap: 10 },
-  cancelBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#27272a", justifyContent: "center", alignItems: "center" },
-  stopBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#22c55e", borderRadius: 10, paddingVertical: 10 },
-  stopBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  recordingBar: { flexDirection: "row", alignItems: "center", gap: 8 },
+  recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#ef4444" },
+  recordingTime: { color: "#fff", fontSize: 14, fontWeight: "600", fontVariant: ["tabular-nums"], minWidth: 32 },
+  cancelBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#27272a", justifyContent: "center", alignItems: "center" },
+  stopBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#22c55e", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  stopBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   uploadingText: { color: "#71717a", fontSize: 13 },
   micButton: { flexDirection: "row", alignItems: "center", gap: 6 },
   micButtonText: { color: "#f59e0b", fontSize: 13, fontWeight: "500" },
