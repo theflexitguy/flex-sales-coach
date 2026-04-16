@@ -8,7 +8,11 @@ export default function CallsLayout() {
         headerTintColor: "#fff",
         headerTitleStyle: { fontWeight: "600" },
         contentStyle: { backgroundColor: "#09090b" },
+        headerBackTitle: "Conversations",
       }}
-    />
+    >
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="[id]" options={{ title: "Conversation" }} />
+    </Stack>
   );
 }

@@ -101,7 +101,7 @@ interface CallDetail {
 export default function CallDetailScreen() {
   const { id, seekMs: seekMsParam } = useLocalSearchParams<{ id: string; seekMs?: string }>();
   const initialSeekMs = seekMsParam ? parseInt(seekMsParam, 10) : null;
-  const didInitialSeek = useRef(false);
+  const didInitialSeek = useRef<string | null>(null);
   const [data, setData] = useState<CallDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
@@ -217,16 +217,17 @@ export default function CallDetailScreen() {
   }, [id]);
 
   // Auto-seek to timestamp when navigating from objections/coaching
+  // Uses a unique key so re-navigation to the same call with a different seekMs re-triggers
+  const seekKey = `${id}-${seekMsParam}`;
   useEffect(() => {
-    if (initialSeekMs != null && data?.call.audioUrl && !didInitialSeek.current) {
-      didInitialSeek.current = true;
-      // Small delay to let the player initialize
+    if (initialSeekMs != null && data?.call.audioUrl && didInitialSeek.current !== seekKey) {
+      didInitialSeek.current = seekKey;
       setTimeout(() => {
         audioPlayer.seekTo(initialSeekMs);
         audioPlayer.play();
       }, 500);
     }
-  }, [data?.call.audioUrl, initialSeekMs]);
+  }, [data?.call.audioUrl, initialSeekMs, seekKey]);
 
   if (loading) return <SkeletonList count={6} />;
 
