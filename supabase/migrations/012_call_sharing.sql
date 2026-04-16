@@ -17,7 +17,6 @@ CREATE POLICY call_shares_select ON call_shares
   FOR SELECT USING (
     user_id = auth.uid()
     OR shared_by = auth.uid()
-    OR call_id IN (SELECT c.id FROM calls c WHERE c.team_id IN (SELECT t.id FROM teams t WHERE t.manager_id = auth.uid()))
   );
 
 CREATE POLICY call_shares_insert ON call_shares
