@@ -248,19 +248,30 @@ export default function CallDetailScreen() {
   useEffect(() => {
     if (initialSeekMs != null && data?.call.audioUrl && didInitialSeek.current !== seekKey) {
       didInitialSeek.current = seekKey;
+
+      // Step 1: Scroll to the transcript section so utterances render and populate positions
+      scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: false });
+
+      // Step 2: After positions are populated, scroll to the exact utterance and start playing
       setTimeout(() => {
         audioPlayer.seekTo(initialSeekMs);
         audioPlayer.play();
-        // Find the matching utterance and scroll to it
+
         const idx = data?.transcript.utterances.findIndex(
           (u) => u.startMs >= initialSeekMs
         ) ?? -1;
         const localY = utteranceYPositions.current[idx];
         if (localY != null) {
           const absoluteY = transcriptSectionY.current + localY;
+          isAutoScrolling.current = true;
           scrollViewRef.current?.scrollTo({ y: absoluteY - 120, animated: true });
+          setTimeout(() => { isAutoScrolling.current = false; }, 500);
         }
-      }, 600);
+
+        // Enable auto-follow so the transcript keeps scrolling with playback
+        setAutoFollow(true);
+        setUserScrolledAway(false);
+      }, 800);
     }
   }, [data?.call.audioUrl, initialSeekMs, seekKey]);
 
