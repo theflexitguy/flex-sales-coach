@@ -120,8 +120,11 @@ export function useAudioPlayer(audioUrl: string | null) {
     playerRef.current?.setPlaybackRate(next);
   }, [rate]);
 
+  const isLoaded = status.isLoaded ?? false;
+
   return {
     isPlaying,
+    isLoaded,
     positionMs,
     durationMs,
     rate,

@@ -29,6 +29,7 @@ import { haptic } from "../../../lib/haptics";
 import { apiGet, apiPost } from "../../../services/api";
 import { reverseGeocode } from "../../../services/location";
 import { VoiceNoteRecorder } from "../../../components/calls/voice-note-recorder";
+import { VoiceNotePlayer } from "../../../components/calls/voice-note-player";
 
 const GRADE_COLORS: Record<string, string> = {
   excellent: "#22c55e",
@@ -106,6 +107,13 @@ interface CallDetail {
     status: string;
     repName: string;
     createdAt: string;
+    responses: Array<{
+      id: string;
+      content: string;
+      audioUrl: string | null;
+      authorName: string;
+      createdAt: string;
+    }>;
   }>;
 }
 
@@ -160,6 +168,9 @@ export default function CallDetailScreen() {
   const isAutoScrolling = useRef(false);
   const snapBackOpacity = useRef(new Animated.Value(0)).current;
   const lastAutoScrollIndex = useRef(-1);
+  const transcriptLayoutReady = useRef(false);
+  const pendingSeekAfterLayout = useRef<number | null>(null);
+  const seekRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Find the current utterance index based on playback position
   const currentUtteranceIndex = data?.transcript.utterances.findIndex((u, i, arr) => {
@@ -227,18 +238,35 @@ export default function CallDetailScreen() {
     }
   }, [currentUtteranceIndex]);
 
-  // Seek audio and scroll to the matching utterance
-  const seekToTimestamp = useCallback(async (ms: number) => {
-    // Seek audio
-    await audioPlayer.seekTo(ms);
-    if (!audioPlayer.isPlaying) audioPlayer.play();
+  // Scroll to a specific utterance index, returning true if successful
+  const scrollToUtterance = useCallback((idx: number): boolean => {
+    const localY = utteranceYPositions.current[idx];
+    if (localY == null) return false;
+    isAutoScrolling.current = true;
+    scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + localY - 120, animated: true });
+    setTimeout(() => { isAutoScrolling.current = false; }, 500);
+    return true;
+  }, []);
 
-    // Reset auto-follow so the existing playback tracker handles scrolling
-    lastAutoScrollIndex.current = -1;
-    setAutoFollow(true);
-    setUserScrolledAway(false);
+  // Cue audio position and scroll to the matching utterance
+  // autoPlay: true = seek + play (utterance taps), false = just cue + scroll (navigation, "Jump to spot")
+  const seekToTimestamp = useCallback((ms: number, autoPlay = true) => {
+    // Clear any pending retry from a previous seek
+    if (seekRetryTimer.current) {
+      clearTimeout(seekRetryTimer.current);
+      seekRetryTimer.current = null;
+    }
 
-    // Try to scroll to the exact utterance if position is known
+    // Cue the audio position so it's ready when the user hits play
+    audioPlayer.seekTo(ms);
+    if (autoPlay) {
+      audioPlayer.play();
+      lastAutoScrollIndex.current = -1;
+      setAutoFollow(true);
+      setUserScrolledAway(false);
+    }
+
+    // Find the target utterance
     const utterances = data?.transcript.utterances ?? [];
     const idx = utterances.findIndex(
       (u, i, arr) => {
@@ -247,26 +275,42 @@ export default function CallDetailScreen() {
       }
     );
 
-    if (idx >= 0) {
-      const localY = utteranceYPositions.current[idx];
-      if (localY != null) {
-        isAutoScrolling.current = true;
-        scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current + localY - 120, animated: true });
-        setTimeout(() => { isAutoScrolling.current = false; }, 500);
-        return;
-      }
-    }
+    if (idx < 0) return;
 
-    // Position not known — just scroll to the transcript section.
-    // Auto-follow will take over once the utterance renders and becomes the currentUtteranceIndex.
+    // Try to scroll immediately if position is already known
+    if (scrollToUtterance(idx)) return;
+
+    // Position not known yet — scroll to transcript section first, then retry
     isAutoScrolling.current = true;
-    scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: true });
-    setTimeout(() => { isAutoScrolling.current = false; }, 500);
-  }, [audioPlayer, data?.transcript.utterances]);
+    scrollViewRef.current?.scrollTo({ y: transcriptSectionY.current, animated: false });
+    setTimeout(() => { isAutoScrolling.current = false; }, 300);
+
+    // Retry up to 5 times at 200ms intervals waiting for onLayout to populate
+    let retries = 0;
+    const tryScroll = () => {
+      retries++;
+      if (scrollToUtterance(idx)) return;
+      if (retries < 5) {
+        seekRetryTimer.current = setTimeout(tryScroll, 200);
+      }
+    };
+    seekRetryTimer.current = setTimeout(tryScroll, 200);
+  }, [audioPlayer, data?.transcript.utterances, scrollToUtterance]);
+
+  // Clean up retry timer on unmount
+  useEffect(() => {
+    return () => {
+      if (seekRetryTimer.current) clearTimeout(seekRetryTimer.current);
+    };
+  }, []);
 
   function fetchData() {
     setLoading(true);
     setFetchError(false);
+    // Reset layout tracking for new call data
+    transcriptLayoutReady.current = false;
+    pendingSeekAfterLayout.current = null;
+    utteranceYPositions.current = {};
     apiGet<CallDetail>(`/api/mobile/calls/${id}`)
       .then(setData)
       .catch(() => setFetchError(true))
@@ -282,13 +326,17 @@ export default function CallDetailScreen() {
     if (data?.helpRequests) setLocalHelpRequests(data.helpRequests);
   }, [data?.helpRequests]);
 
-  // Auto-seek to timestamp — just call seekToTimestamp like tapping in the transcript
+  // Auto-seek to timestamp once transcript layout is ready
   const seekKey = `${id}-${seekMsParam}`;
   useEffect(() => {
     if (initialSeekMs != null && data && didInitialSeek.current !== seekKey) {
-      didInitialSeek.current = seekKey;
-      // Delay to let the page render and populate utterance positions
-      setTimeout(() => seekToTimestamp(initialSeekMs), 800);
+      if (transcriptLayoutReady.current) {
+        didInitialSeek.current = seekKey;
+        setTimeout(() => seekToTimestamp(initialSeekMs, false), 150);
+      } else {
+        // Transcript hasn't laid out yet — stash the seek and it will fire from onLayout
+        pendingSeekAfterLayout.current = initialSeekMs;
+      }
     }
   }, [data, initialSeekMs, seekKey, seekToTimestamp]);
 
@@ -434,7 +482,7 @@ export default function CallDetailScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Call Sections</Text>
           {sections.map((s) => (
-            <TouchableOpacity key={s.id} style={styles.sectionCard} onPress={() => seekToTimestamp(s.startMs)} activeOpacity={0.7}>
+            <TouchableOpacity key={s.id} style={styles.sectionCard} onPress={() => seekToTimestamp(s.startMs, false)} activeOpacity={0.7}>
               <View style={styles.sectionCardHeader}>
                 <View
                   style={[
@@ -474,7 +522,7 @@ export default function CallDetailScreen() {
             );
             const seekMs = matchIdx >= 0 ? transcript.utterances[matchIdx].startMs : null;
             return (
-              <TouchableOpacity key={o.id} style={styles.objectionCard} onPress={() => { if (seekMs != null) seekToTimestamp(seekMs); }} activeOpacity={seekMs != null ? 0.7 : 1}>
+              <TouchableOpacity key={o.id} style={styles.objectionCard} onPress={() => { if (seekMs != null) seekToTimestamp(seekMs, false); }} activeOpacity={seekMs != null ? 0.7 : 1}>
                 <View style={styles.objectionHeader}>
                   <Text style={styles.objectionCategory}>{o.category}</Text>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -527,7 +575,7 @@ export default function CallDetailScreen() {
               <View style={[styles.statusBadge, { backgroundColor: h.status === "responded" ? "rgba(34,197,94,0.1)" : "rgba(245,158,11,0.1)" }]}>
                 <Text style={{ color: h.status === "responded" ? "#22c55e" : "#f59e0b", fontSize: 11, fontWeight: "500", textTransform: "capitalize" }}>{h.status}</Text>
               </View>
-              <TouchableOpacity onPress={() => seekToTimestamp(h.startMs)}>
+              <TouchableOpacity onPress={() => seekToTimestamp(h.startMs, false)}>
                 <Text style={{ color: "#35b2ff", fontSize: 12 }}>Jump to spot</Text>
               </TouchableOpacity>
             </View>
@@ -548,7 +596,17 @@ export default function CallDetailScreen() {
 
       {/* Transcript — long-press any line to ask manager for help */}
       {transcript.utterances.length > 0 && (
-        <View style={styles.section} onLayout={(e) => { transcriptSectionY.current = e.nativeEvent.layout.y; }}>
+        <View style={styles.section} onLayout={(e) => {
+          transcriptSectionY.current = e.nativeEvent.layout.y;
+          transcriptLayoutReady.current = true;
+          // Fire any pending initial seek now that transcript positions are available
+          const pending = pendingSeekAfterLayout.current;
+          if (pending != null && didInitialSeek.current !== seekKey) {
+            didInitialSeek.current = seekKey;
+            pendingSeekAfterLayout.current = null;
+            setTimeout(() => seekToTimestamp(pending, false), 150);
+          }
+        }}>
           <Text style={styles.sectionTitle}>Transcript</Text>
           <Text style={styles.transcriptHint}>Long-press any line to ask your manager for help</Text>
           {transcript.utterances.map((u, i) => {
@@ -557,7 +615,7 @@ export default function CallDetailScreen() {
             );
             const isHelpStart = matchingHelp && (!transcript.utterances[i - 1] || transcript.utterances[i - 1].startMs < matchingHelp.startMs);
             return (
-              <View key={i}>
+              <View key={i} onLayout={(e) => { utteranceYPositions.current[i] = e.nativeEvent.layout.y; }}>
                 {isHelpStart && matchingHelp && (
                   <View style={styles.helpRequestBanner}>
                     <View style={styles.helpRequestHeader}>
@@ -571,6 +629,25 @@ export default function CallDetailScreen() {
                         {matchingHelp.message}
                       </Text>
                     )}
+                    {/* Existing responses */}
+                    {(matchingHelp.responses ?? []).map((r) => (
+                      <View key={r.id} style={{ gap: 6 }}>
+                        {r.audioUrl ? (
+                          <VoiceNotePlayer audioUrl={r.audioUrl} authorName={r.authorName} />
+                        ) : (
+                          <View style={styles.responseCard}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                              <Ionicons name="chatbubble" size={12} color="#35b2ff" />
+                              <Text style={{ color: "#35b2ff", fontSize: 12, fontWeight: "600" }}>{r.authorName}</Text>
+                            </View>
+                            <Text style={{ color: "#d4d4d8", fontSize: 13, lineHeight: 18 }}>{r.content}</Text>
+                          </View>
+                        )}
+                        {r.audioUrl && r.content !== "Voice note" && (
+                          <Text style={{ color: "#d4d4d8", fontSize: 13, paddingHorizontal: 4 }}>{r.content}</Text>
+                        )}
+                      </View>
+                    ))}
                     {/* Reply input */}
                     {replyingTo === matchingHelp.id ? (
                       <View style={styles.replyContainer}>
@@ -587,15 +664,26 @@ export default function CallDetailScreen() {
                           storagePath={`help-responses/${matchingHelp.id}`}
                           onRecorded={async (audioUrl) => {
                             setSendingReply(true);
+                            const content = replyText.trim() || "Voice note";
                             try {
-                              await apiPost(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
-                                content: replyText.trim() || "Voice note",
+                              const result = await apiPost<{ id: string }>(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
+                                content,
                                 audioUrl,
                               });
                               setReplyingTo(null);
                               setReplyText("");
                               setLocalHelpRequests((prev) =>
-                                prev.map((h) => h.id === matchingHelp.id ? { ...h, status: "responded" } : h)
+                                prev.map((h) => h.id === matchingHelp.id ? {
+                                  ...h,
+                                  status: "responded",
+                                  responses: [...(h.responses ?? []), {
+                                    id: result.id ?? `temp-${Date.now()}`,
+                                    content,
+                                    audioUrl,
+                                    authorName: "You",
+                                    createdAt: new Date().toISOString(),
+                                  }],
+                                } : h)
                               );
                               haptic.success();
                             } catch {
@@ -613,14 +701,25 @@ export default function CallDetailScreen() {
                             disabled={sendingReply || !replyText.trim()}
                             onPress={async () => {
                               setSendingReply(true);
+                              const content = replyText.trim();
                               try {
-                                await apiPost(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
-                                  content: replyText.trim(),
+                                const result = await apiPost<{ id: string }>(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
+                                  content,
                                 });
                                 setReplyingTo(null);
                                 setReplyText("");
                                 setLocalHelpRequests((prev) =>
-                                  prev.map((h) => h.id === matchingHelp.id ? { ...h, status: "responded" } : h)
+                                  prev.map((h) => h.id === matchingHelp.id ? {
+                                    ...h,
+                                    status: "responded",
+                                    responses: [...(h.responses ?? []), {
+                                      id: result.id ?? `temp-${Date.now()}`,
+                                      content,
+                                      audioUrl: null,
+                                      authorName: "You",
+                                      createdAt: new Date().toISOString(),
+                                    }],
+                                  } : h)
                                 );
                                 haptic.success();
                               } catch {
@@ -650,9 +749,6 @@ export default function CallDetailScreen() {
                 <Pressable
                   onPress={() => seekToTimestamp(u.startMs)}
                   onLongPress={() => setHelpModal({ text: u.text, startMs: u.startMs, endMs: u.endMs })}
-                  onLayout={(e) => {
-                    utteranceYPositions.current[i] = e.nativeEvent.layout.y;
-                  }}
                   style={({ pressed }) => [
                     styles.utterance,
                     pressed && styles.utterancePressed,
@@ -792,6 +888,7 @@ export default function CallDetailScreen() {
                     status: "pending",
                     repName: "You",
                     createdAt: new Date().toISOString(),
+                    responses: [],
                   }]);
                   setHelpModal(null);
                   setHelpMessage("");
@@ -973,6 +1070,24 @@ const styles = StyleSheet.create({
   helpRequestLabel: { color: "#f59e0b", fontSize: 12, fontWeight: "600" as const },
   helpRequestStatus: { color: "#71717a", fontSize: 11, textTransform: "capitalize" as const, marginLeft: "auto" as unknown as number },
   helpRequestMessage: { color: "#d4d4d8", fontSize: 13, lineHeight: 18 },
+  responseCard: {
+    backgroundColor: "rgba(53,178,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(53,178,255,0.15)",
+    borderRadius: 8,
+    padding: 10,
+  },
+  voiceNoteChip: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    backgroundColor: "rgba(53,178,255,0.1)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignSelf: "flex-start" as const,
+    marginTop: 4,
+  },
   replyButton: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, paddingTop: 4 },
   replyButtonText: { color: "#35b2ff", fontSize: 13, fontWeight: "500" as const },
   replyContainer: { gap: 8, paddingTop: 4 },

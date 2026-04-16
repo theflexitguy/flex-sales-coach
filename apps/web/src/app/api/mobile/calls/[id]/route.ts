@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
+import { createAdmin } from "@flex/supabase/admin";
 
 export async function GET(
   request: Request,
@@ -41,6 +42,25 @@ export async function GET(
     supabase.from("help_requests").select("*").eq("call_id", id).order("created_at"),
   ]);
 
+  // Fetch responses with admin client to avoid nested RLS issues
+  const admin = createAdmin();
+  const helpRequestIds = (helpRequests ?? []).map((h: { id: string }) => h.id);
+  let helpResponses: Record<string, unknown>[] = [];
+  if (helpRequestIds.length > 0) {
+    const { data } = await admin
+      .from("help_request_responses")
+      .select("*")
+      .in("request_id", helpRequestIds)
+      .order("created_at");
+    helpResponses = data ?? [];
+  }
+  const responsesByRequest = new Map<string, Record<string, unknown>[]>();
+  for (const r of helpResponses) {
+    const key = r.request_id as string;
+    if (!responsesByRequest.has(key)) responsesByRequest.set(key, []);
+    responsesByRequest.get(key)!.push(r);
+  }
+
   // Get signed audio URL
   let audioUrl: string | null = null;
   if (call.audio_storage_path) {
@@ -50,8 +70,12 @@ export async function GET(
     audioUrl = signedData?.signedUrl ?? null;
   }
 
-  // Get note author names
-  const authorIds = [...new Set((notes ?? []).map((n: { author_id: string }) => n.author_id))];
+  // Get author names for notes + help request responses
+  const responseAuthorIds = helpResponses.map((r) => r.author_id as string);
+  const authorIds = [...new Set([
+    ...(notes ?? []).map((n: { author_id: string }) => n.author_id),
+    ...responseAuthorIds,
+  ])];
   const authorMap: Record<string, string> = {};
   if (authorIds.length > 0) {
     const { data: authors } = await supabase
@@ -123,6 +147,13 @@ export async function GET(
       status: h.status,
       repName: authorMap[h.rep_id as string] ?? "Rep",
       createdAt: h.created_at,
+      responses: (responsesByRequest.get(h.id as string) ?? []).map((r) => ({
+        id: r.id,
+        content: r.content,
+        audioUrl: r.audio_url,
+        authorName: authorMap[r.author_id as string] ?? "Coach",
+        createdAt: r.created_at,
+      })),
     })),
   });
 }

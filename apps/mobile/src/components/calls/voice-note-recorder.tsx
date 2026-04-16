@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   AudioModule,
@@ -88,8 +88,9 @@ export function VoiceNoteRecorder({ onRecorded, storagePath }: VoiceNoteRecorder
 
       onRecorded(urlData.publicUrl);
       haptic.success();
-    } catch {
+    } catch (err) {
       haptic.error();
+      Alert.alert("Upload Failed", err instanceof Error ? err.message : "Could not upload voice note. Please try again.");
     }
 
     setUploading(false);
