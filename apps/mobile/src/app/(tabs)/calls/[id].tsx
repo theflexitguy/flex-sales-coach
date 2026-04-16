@@ -17,7 +17,7 @@ import {
   NativeScrollEvent,
   Linking,
 } from "react-native";
-import { useLocalSearchParams, useNavigation } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAudioPlayer } from "../../../hooks/useAudioPlayer";
 import { OutcomeSelector } from "../../../components/calls/outcome-selector";
@@ -110,15 +110,22 @@ export default function CallDetailScreen() {
   const [sendingHelp, setSendingHelp] = useState(false);
 
   const navigation = useNavigation();
+  const router = useRouter();
   const audioPlayer = useAudioPlayer(data?.call.audioUrl ?? null);
   const [address, setAddress] = useState<string | null>(null);
 
-  // Set header title to customer name
+  // Set header with back button
   useEffect(() => {
-    if (data?.call.customerName) {
-      navigation.setOptions({ title: data.call.customerName });
-    }
-  }, [data?.call.customerName, navigation]);
+    navigation.setOptions({
+      title: data?.call.customerName ?? "Conversation",
+      headerShown: true,
+      headerLeft: () => (
+        <TouchableOpacity onPress={() => router.back()} style={{ marginRight: 8 }}>
+          <Ionicons name="chevron-back" size={24} color="#fff" />
+        </TouchableOpacity>
+      ),
+    });
+  }, [data?.call.customerName, navigation, router]);
 
   // Reverse geocode location
   useEffect(() => {
