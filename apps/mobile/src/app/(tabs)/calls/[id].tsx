@@ -118,6 +118,10 @@ export default function CallDetailScreen() {
   const [helpModal, setHelpModal] = useState<{ text: string; startMs: number; endMs: number } | null>(null);
   const [helpMessage, setHelpMessage] = useState("");
   const [sendingHelp, setSendingHelp] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [localHelpRequests, setLocalHelpRequests] = useState<CallDetail["helpRequests"]>([]);
 
   const navigation = useNavigation();
   const router = useRouter();
@@ -233,8 +237,12 @@ export default function CallDetailScreen() {
     fetchData();
   }, [id]);
 
-  // Auto-seek to timestamp when navigating from objections/coaching
-  // Uses a unique key so re-navigation to the same call with a different seekMs re-triggers
+  // Sync local help requests from API data
+  useEffect(() => {
+    if (data?.helpRequests) setLocalHelpRequests(data.helpRequests);
+  }, [data?.helpRequests]);
+
+  // Auto-seek to timestamp and scroll to that spot in transcript
   const seekKey = `${id}-${seekMsParam}`;
   useEffect(() => {
     if (initialSeekMs != null && data?.call.audioUrl && didInitialSeek.current !== seekKey) {
@@ -242,7 +250,16 @@ export default function CallDetailScreen() {
       setTimeout(() => {
         audioPlayer.seekTo(initialSeekMs);
         audioPlayer.play();
-      }, 500);
+        // Find the matching utterance and scroll to it
+        const idx = data?.transcript.utterances.findIndex(
+          (u) => u.startMs >= initialSeekMs
+        ) ?? -1;
+        const localY = utteranceYPositions.current[idx];
+        if (localY != null) {
+          const absoluteY = transcriptSectionY.current + localY;
+          scrollViewRef.current?.scrollTo({ y: absoluteY - 120, animated: true });
+        }
+      }, 600);
     }
   }, [data?.call.audioUrl, initialSeekMs, seekKey]);
 
@@ -481,7 +498,7 @@ export default function CallDetailScreen() {
           <Text style={styles.sectionTitle}>Transcript</Text>
           <Text style={styles.transcriptHint}>Long-press any line to ask your manager for help</Text>
           {transcript.utterances.map((u, i) => {
-            const matchingHelp = helpRequests.find(
+            const matchingHelp = localHelpRequests.find(
               (h) => u.startMs >= h.startMs && u.startMs <= h.endMs
             );
             const isHelpStart = matchingHelp && (!transcript.utterances[i - 1] || transcript.utterances[i - 1].startMs < matchingHelp.startMs);
@@ -495,7 +512,64 @@ export default function CallDetailScreen() {
                       <Text style={styles.helpRequestStatus}>{matchingHelp.status}</Text>
                     </View>
                     {matchingHelp.message && (
-                      <Text style={styles.helpRequestMessage}>{matchingHelp.message}</Text>
+                      <Text style={styles.helpRequestMessage}>
+                        <Text style={{ fontWeight: "600", color: "#a1a1aa" }}>{matchingHelp.repName}: </Text>
+                        {matchingHelp.message}
+                      </Text>
+                    )}
+                    {/* Reply input */}
+                    {replyingTo === matchingHelp.id ? (
+                      <View style={styles.replyContainer}>
+                        <TextInput
+                          style={styles.replyInput}
+                          value={replyText}
+                          onChangeText={setReplyText}
+                          placeholder="Type your coaching response..."
+                          placeholderTextColor="#71717a"
+                          multiline
+                          autoFocus
+                        />
+                        <View style={styles.replyActions}>
+                          <TouchableOpacity onPress={() => { setReplyingTo(null); setReplyText(""); }}>
+                            <Text style={{ color: "#71717a", fontSize: 13 }}>Cancel</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.replySendBtn, sendingReply && { opacity: 0.5 }]}
+                            disabled={sendingReply || !replyText.trim()}
+                            onPress={async () => {
+                              setSendingReply(true);
+                              try {
+                                await apiPost(`/api/mobile/help-requests/${matchingHelp.id}/respond`, {
+                                  content: replyText.trim(),
+                                });
+                                setReplyingTo(null);
+                                setReplyText("");
+                                // Update local state to show responded
+                                setLocalHelpRequests((prev) =>
+                                  prev.map((h) => h.id === matchingHelp.id ? { ...h, status: "responded" } : h)
+                                );
+                                haptic.success();
+                              } catch {
+                                Alert.alert("Error", "Failed to send response");
+                              }
+                              setSendingReply(false);
+                            }}
+                          >
+                            <Ionicons name="send" size={14} color="#000" />
+                            <Text style={styles.replySendText}>{sendingReply ? "Sending..." : "Send"}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.replyButton}
+                        onPress={() => setReplyingTo(matchingHelp.id)}
+                      >
+                        <Ionicons name="chatbubble-outline" size={14} color="#35b2ff" />
+                        <Text style={styles.replyButtonText}>
+                          {matchingHelp.status === "responded" ? "Add Another Response" : "Respond"}
+                        </Text>
+                      </TouchableOpacity>
                     )}
                   </View>
                 )}
@@ -627,16 +701,27 @@ export default function CallDetailScreen() {
                 if (!helpModal || !id) return;
                 setSendingHelp(true);
                 try {
-                  await apiPost("/api/mobile/help-requests", {
+                  const result = await apiPost<{ id: string }>("/api/mobile/help-requests", {
                     callId: id,
                     startMs: helpModal.startMs,
                     endMs: helpModal.endMs,
                     transcriptExcerpt: helpModal.text,
                     message: helpMessage || null,
                   });
+                  // Add to local state immediately so it shows in transcript
+                  setLocalHelpRequests((prev) => [...prev, {
+                    id: result.id,
+                    startMs: helpModal.startMs,
+                    endMs: helpModal.endMs,
+                    transcriptExcerpt: helpModal.text,
+                    message: helpMessage || null,
+                    status: "pending",
+                    repName: "You",
+                    createdAt: new Date().toISOString(),
+                  }]);
                   setHelpModal(null);
                   setHelpMessage("");
-                  Alert.alert("Sent!", "Your manager will see this in their coaching queue.");
+                  haptic.success();
                 } catch (err: unknown) {
                   Alert.alert("Error", err instanceof Error ? err.message : "Failed to send");
                 } finally {
@@ -814,6 +899,13 @@ const styles = StyleSheet.create({
   helpRequestLabel: { color: "#f59e0b", fontSize: 12, fontWeight: "600" as const },
   helpRequestStatus: { color: "#71717a", fontSize: 11, textTransform: "capitalize" as const, marginLeft: "auto" as unknown as number },
   helpRequestMessage: { color: "#d4d4d8", fontSize: 13, lineHeight: 18 },
+  replyButton: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, paddingTop: 4 },
+  replyButtonText: { color: "#35b2ff", fontSize: 13, fontWeight: "500" as const },
+  replyContainer: { gap: 8, paddingTop: 4 },
+  replyInput: { backgroundColor: "rgba(39,39,42,0.5)", borderWidth: 1, borderColor: "#3f3f46", borderRadius: 10, padding: 10, color: "#fff", fontSize: 14, minHeight: 60, textAlignVertical: "top" as const },
+  replyActions: { flexDirection: "row" as const, justifyContent: "space-between" as const, alignItems: "center" as const },
+  replySendBtn: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, backgroundColor: "#35b2ff", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  replySendText: { color: "#000", fontSize: 13, fontWeight: "600" as const },
   transcriptHint: { color: "#52525b", fontSize: 12, marginBottom: 8, fontStyle: "italic" },
   // Help request modal
   helpModalOverlay: { flex: 1 },
