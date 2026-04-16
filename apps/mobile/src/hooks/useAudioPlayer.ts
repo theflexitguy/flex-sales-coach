@@ -11,9 +11,13 @@ export function useAudioPlayer(audioUrl: string | null) {
   );
 
   const playerRef = useRef<Player | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!source) return;
+    if (!source) {
+      setReady(false);
+      return;
+    }
 
     // Native Expo Go binary expects 3 args: (source, updateInterval, keepAudioSessionActive)
     const p = new (AudioModule.AudioPlayer as unknown as new (
@@ -23,14 +27,17 @@ export function useAudioPlayer(audioUrl: string | null) {
     ) => Player)(source, 500, false);
 
     playerRef.current = p;
+    setReady(true);
 
     return () => {
-      try { p.remove(); } catch { /* ignore */ }
+      try {
+        p.pause();
+        p.remove();
+      } catch { /* ignore */ }
       playerRef.current = null;
+      setReady(false);
     };
   }, [source]);
-
-  const player = playerRef.current;
 
   const [status, setStatus] = useState<AudioStatus>({
     id: 0,
@@ -50,12 +57,13 @@ export function useAudioPlayer(audioUrl: string | null) {
   });
 
   useEffect(() => {
-    if (!player) return;
-    const sub = player.addListener("playbackStatusUpdate", (s: AudioStatus) => {
+    const p = playerRef.current;
+    if (!p || !ready) return;
+    const sub = p.addListener("playbackStatusUpdate", (s: AudioStatus) => {
       setStatus(s);
     });
     return () => sub.remove();
-  }, [player]);
+  }, [ready]);
 
   const [rate, setRate] = useState(1);
   const hasSetMode = useRef(false);
@@ -71,50 +79,46 @@ export function useAudioPlayer(audioUrl: string | null) {
   const durationMs = (status.duration ?? 0) * 1000;
   const isPlaying = status.playing ?? false;
 
+  // All callbacks read from playerRef.current at call time, not capture time
   const play = useCallback(() => {
-    if (!audioUrl || !player) return;
-    player.play();
-  }, [player, audioUrl]);
+    playerRef.current?.play();
+  }, []);
 
   const pause = useCallback(() => {
-    player?.pause();
-  }, [player]);
+    playerRef.current?.pause();
+  }, []);
 
   const togglePlay = useCallback(() => {
-    if (!audioUrl || !player) return;
-    if (isPlaying) player.pause();
-    else player.play();
-  }, [isPlaying, player, audioUrl]);
+    const p = playerRef.current;
+    if (!p) return;
+    if (p.playing) p.pause();
+    else p.play();
+  }, []);
 
-  const seekTo = useCallback(
-    (ms: number) => {
-      player?.seekTo(ms / 1000);
-    },
-    [player]
-  );
+  const seekTo = useCallback((ms: number) => {
+    playerRef.current?.seekTo(ms / 1000);
+  }, []);
 
   const skip = useCallback(
     (seconds: number) => {
       const newPos = Math.max(0, Math.min(positionMs + seconds * 1000, durationMs));
-      seekTo(newPos);
+      playerRef.current?.seekTo(newPos / 1000);
     },
-    [positionMs, durationMs, seekTo]
+    [positionMs, durationMs]
   );
 
-  const setPlaybackRate = useCallback(
-    (newRate: number) => {
-      setRate(newRate);
-      player?.setPlaybackRate(newRate);
-    },
-    [player]
-  );
+  const setPlaybackRate = useCallback((newRate: number) => {
+    setRate(newRate);
+    playerRef.current?.setPlaybackRate(newRate);
+  }, []);
 
   const cycleRate = useCallback(() => {
     const rates = [1, 1.25, 1.5, 1.75, 2];
     const idx = rates.indexOf(rate);
     const next = rates[(idx + 1) % rates.length];
-    setPlaybackRate(next);
-  }, [rate, setPlaybackRate]);
+    setRate(next);
+    playerRef.current?.setPlaybackRate(next);
+  }, [rate]);
 
   return {
     isPlaying,
