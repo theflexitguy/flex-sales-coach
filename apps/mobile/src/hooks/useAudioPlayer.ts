@@ -1,14 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { AudioModule, setAudioModeAsync } from "expo-audio";
-import type { AudioStatus } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import type { AudioPlayer as ExpoAudioPlayer, AudioStatus } from "expo-audio";
 
 export function useAudioPlayer(audioUrl: string | null) {
-  const playerRef = useRef<InstanceType<typeof AudioModule.AudioPlayer> | null>(null);
+  const playerRef = useRef<ExpoAudioPlayer | null>(null);
 
   useEffect(() => {
     if (!audioUrl) return;
 
-    const p = new AudioModule.AudioPlayer({ uri: audioUrl });
+    const p = createAudioPlayer(audioUrl, 250);
     playerRef.current = p;
 
     return () => {
