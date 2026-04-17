@@ -151,8 +151,48 @@ class UploadQueue {
       if (errors) {
         this.errors = JSON.parse(errors);
       }
+
+      // Drop jobs whose underlying files no longer exist. iOS Caches is
+      // purgeable — after an app restart or update the m4a may be gone.
+      // Retrying forever spams the UI with a scary "chunk file missing"
+      // error on every launch.
+      if (this.queue.length > 0) {
+        const survivors: ChunkUploadJob[] = [];
+        const dropped: ChunkUploadJob[] = [];
+        for (const job of this.queue) {
+          const info = await FileSystem.getInfoAsync(job.uri);
+          if (info.exists) {
+            survivors.push(job);
+          } else {
+            dropped.push(job);
+          }
+        }
+        if (dropped.length > 0) {
+          this.queue = survivors;
+          await this.persist();
+          for (const job of dropped) {
+            const record: UploadErrorRecord = {
+              at: Date.now(),
+              sessionId: job.sessionId,
+              chunkIndex: job.chunkIndex,
+              retries: job.retries,
+              stage: "storage",
+              message: `dropped on restore — file missing: ${job.uri}`,
+            };
+            this.errors.unshift(record);
+          }
+          if (this.errors.length > ERROR_RING_SIZE) {
+            this.errors.length = ERROR_RING_SIZE;
+          }
+          await this.persistErrors();
+        }
+      }
+
       if (this.queue.length > 0) {
         this.processNext();
+      } else {
+        // Any pending completes may now be unblocked since we dropped dead chunks
+        this.checkSessionCompletes();
       }
     } catch {
       // ignore
@@ -231,9 +271,15 @@ class UploadQueue {
       const msg = error instanceof Error ? error.message : "Unknown error";
       const stage: UploadErrorRecord["stage"] =
         error instanceof UploadStageError ? error.stage : "unknown";
+      const unrecoverable =
+        error instanceof UploadStageError && error.unrecoverable === true;
       console.error(`Upload failed for chunk ${job.chunkIndex} [${stage}]: ${msg}`);
       this.lastError = `Chunk ${job.chunkIndex} [${stage}]: ${msg}`;
-      this.onError?.(this.lastError);
+      // Only surface live-upload errors to the UI banner. Stale/missing files
+      // from a prior session aren't actionable and shouldn't alarm the user.
+      if (!unrecoverable) {
+        this.onError?.(this.lastError);
+      }
 
       const record: UploadErrorRecord = {
         at: Date.now(),
@@ -249,13 +295,14 @@ class UploadQueue {
       }
       await this.persistErrors();
 
-      // Fire Alert callback on first failure per session so user sees a real message
-      if (!this.alertedForSessions.has(job.sessionId)) {
+      // Only alert for recoverable failures — unrecoverable (stale/missing file)
+      // isn't actionable for the user and shouldn't look like a live problem.
+      if (!unrecoverable && !this.alertedForSessions.has(job.sessionId)) {
         this.alertedForSessions.add(job.sessionId);
         this.onFirstError?.(record);
       }
 
-      if (job.retries >= MAX_RETRIES) {
+      if (unrecoverable || job.retries >= MAX_RETRIES) {
         this.queue.shift();
         await this.persist();
       } else {
@@ -293,7 +340,7 @@ class UploadQueue {
     // evicted it (rare but possible), this is an unrecoverable error — skip it.
     const info = await FileSystem.getInfoAsync(job.uri);
     if (!info.exists) {
-      throw new UploadStageError("storage", `chunk file missing: ${job.uri}`);
+      throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
     }
 
     // Upload directly to Supabase Storage REST via native URLSession (iOS) /
@@ -403,7 +450,8 @@ class UploadQueue {
 class UploadStageError extends Error {
   constructor(
     readonly stage: UploadErrorRecord["stage"],
-    message: string
+    message: string,
+    readonly unrecoverable: boolean = false
   ) {
     super(message);
     this.name = "UploadStageError";
