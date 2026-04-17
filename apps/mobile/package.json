@@ -18,6 +18,7 @@
     "expo": "~54.0.33",
     "expo-audio": "~0.4.9",
     "expo-constants": "~18.0.13",
+    "expo-dev-client": "~6.0.20",
     "expo-file-system": "~19.0.21",
     "expo-haptics": "^55.0.14",
     "expo-linking": "~8.0.11",

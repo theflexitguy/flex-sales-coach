@@ -19,12 +19,7 @@ export function useAudioPlayer(audioUrl: string | null) {
       return;
     }
 
-    // Native Expo Go binary expects 3 args: (source, updateInterval, keepAudioSessionActive)
-    const p = new (AudioModule.AudioPlayer as unknown as new (
-      s: { uri: string } | null,
-      interval: number,
-      keep: boolean
-    ) => Player)(source, 500, false);
+    const p = new AudioModule.AudioPlayer(source, 500);
 
     playerRef.current = p;
     setReady(true);
