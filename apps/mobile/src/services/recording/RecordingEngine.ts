@@ -2,10 +2,38 @@ import {
   setAudioModeAsync,
   requestRecordingPermissionsAsync,
   AudioModule,
-  RecordingPresets,
+  IOSOutputFormat,
+  AudioQuality,
+  type RecordingOptions,
 } from "expo-audio";
 
 type AudioRecorder = InstanceType<typeof AudioModule.AudioRecorder>;
+
+// Explicit AAC config — the HIGH_QUALITY preset sometimes falls back to LPCM
+// on iOS, producing files 20x larger (170KB/s raw PCM vs 8KB/s AAC) that
+// FFmpeg can't concat because the codec params get reset between chunks.
+const RECORDING_OPTIONS: RecordingOptions = {
+  isMeteringEnabled: true,
+  extension: ".m4a",
+  sampleRate: 44100,
+  numberOfChannels: 1, // Mono — halves the file size with no loss for speech
+  bitRate: 64000,      // 64 kbps — plenty for speech, keeps files small
+  android: {
+    outputFormat: "mpeg4",
+    audioEncoder: "aac",
+  },
+  ios: {
+    outputFormat: IOSOutputFormat.MPEG4AAC,
+    audioQuality: AudioQuality.MEDIUM,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: "audio/mp4",
+    bitsPerSecond: 64000,
+  },
+};
 
 export class RecordingEngine {
   private recorder: AudioRecorder | null = null;
@@ -29,10 +57,7 @@ export class RecordingEngine {
       interruptionMode: "doNotMix",
     });
 
-    const recorder = new AudioModule.AudioRecorder({
-      ...RecordingPresets.HIGH_QUALITY,
-      isMeteringEnabled: true,
-    });
+    const recorder = new AudioModule.AudioRecorder(RECORDING_OPTIONS);
 
     await recorder.prepareToRecordAsync();
     recorder.record();

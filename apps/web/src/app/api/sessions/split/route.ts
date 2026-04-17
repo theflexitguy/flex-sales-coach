@@ -94,16 +94,33 @@ export async function POST(request: Request) {
         .sort((a, b) => a.index - b.index)
         .map((d) => d.path);
 
-      // Create concat file list for FFmpeg
+      // Normalize each chunk to a common WAV format first.
+      // This works around chunks that may have different codec params (AAC vs
+      // LPCM, different sample rates, etc.) — the concat demuxer is strict
+      // about input uniformity.
+      const normalizedPaths: string[] = [];
+      for (const chunkPath of chunkPaths) {
+        const normalizedPath = chunkPath.replace(/\.m4a$/, ".wav");
+        try {
+          execSync(
+            `${shq(FFMPEG)} -i ${shq(chunkPath)} -ac 1 -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
+            { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
+          );
+          normalizedPaths.push(normalizedPath);
+        } catch (err) {
+          const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+          throw new Error(`ffmpeg normalize chunk failed: ${stderr.slice(-500)}`);
+        }
+      }
+
+      // Create concat file list for normalized WAV chunks
       const concatListPath = join(workDir, "concat.txt");
-      const concatContent = chunkPaths
+      const concatContent = normalizedPaths
         .map((p) => `file '${p}'`)
         .join("\n");
       writeFileSync(concatListPath, concatContent);
 
-      // Concatenate all chunks.
-      // Use re-encode (not -c copy) because expo-audio chunks can have slightly
-      // different codec params across recordings which makes concat demuxer fail.
+      // Concatenate WAVs (all now identical params) then encode to final M4A
       const concatPath = join(workDir, "full_recording.m4a");
       try {
         execSync(
