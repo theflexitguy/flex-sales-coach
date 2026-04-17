@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -11,30 +11,33 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-const ExpoSecureStoreAdapter = {
+// Supabase auth tokens (JWT access + refresh) exceed SecureStore's 2KB limit.
+// AsyncStorage is the standard pattern for Supabase on Expo — JWTs are meant
+// to be used in plain headers and are protected by short TTLs + refresh rotation.
+const storage = {
   getItem: async (key: string) => {
     if (Platform.OS === "web") return localStorage.getItem(key);
-    return SecureStore.getItemAsync(key);
+    return AsyncStorage.getItem(key);
   },
   setItem: async (key: string, value: string) => {
     if (Platform.OS === "web") {
       localStorage.setItem(key, value);
       return;
     }
-    await SecureStore.setItemAsync(key, value);
+    await AsyncStorage.setItem(key, value);
   },
   removeItem: async (key: string) => {
     if (Platform.OS === "web") {
       localStorage.removeItem(key);
       return;
     }
-    await SecureStore.deleteItemAsync(key);
+    await AsyncStorage.removeItem(key);
   },
 };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: ExpoSecureStoreAdapter,
+    storage,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
