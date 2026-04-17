@@ -52,27 +52,36 @@ export async function POST(request: Request) {
       throw new Error("No chunks found for session");
     }
 
+    // Get fine-grained location points (one every ~30s during recording)
+    const { data: locationPoints } = await admin
+      .from("session_location_points")
+      .select("elapsed_s, latitude, longitude")
+      .eq("session_id", sessionId)
+      .order("elapsed_s");
+
     // Create temp working directory
     const workDir = join(tmpdir(), `flex-split-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
 
     try {
-      // Download all chunks
-      const chunkPaths: string[] = [];
-      for (const chunk of chunks) {
-        const { data: fileData, error: dlError } = await admin.storage
-          .from("recording-chunks")
-          .download(chunk.storage_path);
-
-        if (dlError || !fileData) {
-          throw new Error(`Failed to download chunk ${chunk.chunk_index}: ${dlError?.message}`);
-        }
-
-        const chunkPath = join(workDir, `chunk_${chunk.chunk_index}.m4a`);
-        const buffer = Buffer.from(await fileData.arrayBuffer());
-        writeFileSync(chunkPath, buffer);
-        chunkPaths.push(chunkPath);
-      }
+      // Download all chunks in parallel (much faster for long sessions)
+      const downloads = await Promise.all(
+        chunks.map(async (chunk: { chunk_index: number; storage_path: string }) => {
+          const { data: fileData, error: dlError } = await admin.storage
+            .from("recording-chunks")
+            .download(chunk.storage_path);
+          if (dlError || !fileData) {
+            throw new Error(`Failed to download chunk ${chunk.chunk_index}: ${dlError?.message}`);
+          }
+          const chunkPath = join(workDir, `chunk_${chunk.chunk_index}.m4a`);
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          writeFileSync(chunkPath, buffer);
+          return { index: chunk.chunk_index, path: chunkPath };
+        })
+      );
+      const chunkPaths = downloads
+        .sort((a, b) => a.index - b.index)
+        .map((d) => d.path);
 
       // Create concat file list for FFmpeg
       const concatListPath = join(workDir, "concat.txt");
@@ -85,7 +94,7 @@ export async function POST(request: Request) {
       const concatPath = join(workDir, "full_recording.m4a");
       execSync(
         `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy "${concatPath}" -y 2>/dev/null`,
-        { timeout: 120000 }
+        { timeout: 240000 }
       );
 
       // Detect silences
@@ -193,18 +202,31 @@ export async function POST(request: Request) {
             upsert: false,
           });
 
-        // Find the chunk whose time range overlaps this segment's midpoint
-        // Each chunk covers [chunkIndex * chunkDuration, (chunkIndex+1) * chunkDuration]
-        const chunkDuration = chunks.length > 1
-          ? (chunks.reduce((sum, c) => sum + (c.duration_seconds ?? 0), 0) / chunks.length)
-          : (chunks[0]?.duration_seconds ?? 300);
+        // Geotag this segment:
+        // 1. Prefer fine-grained location points (sampled every ~30s during recording)
+        // 2. Fall back to the closest chunk's location
+        // 3. Fall back to the session's initial location
         const segMidpoint = (seg.start + seg.end) / 2;
-        const closestChunk = chunks.reduce((best, c) => {
-          const chunkMid = (c.chunk_index + 0.5) * chunkDuration;
-          return Math.abs(chunkMid - segMidpoint) < Math.abs((best.chunk_index + 0.5) * chunkDuration - segMidpoint) ? c : best;
-        }, chunks[0]);
-        const segLatitude = closestChunk?.latitude ?? session.latitude ?? null;
-        const segLongitude = closestChunk?.longitude ?? session.longitude ?? null;
+        let segLatitude: number | null = null;
+        let segLongitude: number | null = null;
+
+        if (locationPoints && locationPoints.length > 0) {
+          const closest = locationPoints.reduce((best, p) =>
+            Math.abs(p.elapsed_s - segMidpoint) < Math.abs(best.elapsed_s - segMidpoint) ? p : best
+          , locationPoints[0]);
+          segLatitude = closest.latitude;
+          segLongitude = closest.longitude;
+        } else {
+          const chunkDuration = chunks.length > 1
+            ? (chunks.reduce((sum, c) => sum + (c.duration_seconds ?? 0), 0) / chunks.length)
+            : (chunks[0]?.duration_seconds ?? 300);
+          const closestChunk = chunks.reduce((best, c) => {
+            const chunkMid = (c.chunk_index + 0.5) * chunkDuration;
+            return Math.abs(chunkMid - segMidpoint) < Math.abs((best.chunk_index + 0.5) * chunkDuration - segMidpoint) ? c : best;
+          }, chunks[0]);
+          segLatitude = closestChunk?.latitude ?? session.latitude ?? null;
+          segLongitude = closestChunk?.longitude ?? session.longitude ?? null;
+        }
 
         // Create call record
         const { data: call } = await admin

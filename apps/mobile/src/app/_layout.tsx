@@ -19,6 +19,13 @@ export default function RootLayout() {
     uploadQueue.restore();
   }, []);
 
+  // After auth is ready, recover any orphaned recording sessions from a crash/kill
+  useEffect(() => {
+    if (ready && session) {
+      useRecordingStore.getState().recoverOrphanedSessions().catch(() => {});
+    }
+  }, [ready, session]);
+
   // Handle app background/foreground transitions
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState: AppStateStatus) => {

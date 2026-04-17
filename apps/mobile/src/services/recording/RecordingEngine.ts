@@ -26,10 +26,13 @@ export class RecordingEngine {
       allowsRecording: true,
       playsInSilentMode: true,
       shouldPlayInBackground: true,
-      interruptionMode: "duckOthers",
+      interruptionMode: "doNotMix",
     });
 
-    const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+    const recorder = new AudioModule.AudioRecorder({
+      ...RecordingPresets.HIGH_QUALITY,
+      isMeteringEnabled: true,
+    });
 
     await recorder.prepareToRecordAsync();
     recorder.record();
@@ -76,11 +79,34 @@ export class RecordingEngine {
     return this.isRecordingFlag;
   }
 
+  /**
+   * Check if the native recorder is still actively recording.
+   * Returns false if the OS paused it (e.g., phone call interruption).
+   */
+  isActuallyRecording(): boolean {
+    if (!this.isRecordingFlag || !this.recorder) return false;
+    try {
+      const status = this.recorder.getStatus?.();
+      if (status && typeof status === "object") {
+        const s = status as { isRecording?: boolean; canRecord?: boolean };
+        if (typeof s.isRecording === "boolean") return s.isRecording;
+      }
+    } catch { /* native status not available */ }
+    return this.isRecordingFlag;
+  }
+
   async getStatus(): Promise<{ durationMs: number; metering: number } | null> {
     if (!this.recorder || !this.isRecordingFlag) return null;
+    let metering = -160;
+    try {
+      const status = this.recorder.getStatus?.() as { metering?: number } | undefined;
+      if (status?.metering != null && isFinite(status.metering)) {
+        metering = status.metering;
+      }
+    } catch { /* fallback */ }
     return {
       durationMs: Date.now() - this.recordingStartTime,
-      metering: -30,
+      metering,
     };
   }
 }

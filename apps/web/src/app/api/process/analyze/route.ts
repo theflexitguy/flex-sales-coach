@@ -140,6 +140,35 @@ export async function POST(request: Request) {
       const totalUtterances = utterances.length;
       let lastEndMs = 0;
 
+      // Token-based fuzzy matching: find the utterance with the most overlapping
+      // meaningful words. Handles paraphrasing better than substring matching.
+      function tokenize(s: string): string[] {
+        return (s ?? "")
+          .toLowerCase()
+          .replace(/[^a-z0-9\s']/g, " ")
+          .split(/\s+/)
+          .filter((w) => w.length > 2);
+      }
+
+      function findBestUtteranceIndex(searchText: string, startFrom = 0): number {
+        const needle = new Set(tokenize(searchText));
+        if (needle.size === 0) return -1;
+        let bestIdx = -1;
+        let bestScore = 0;
+        for (let i = startFrom; i < utterances.length; i++) {
+          const hay = new Set(tokenize(utterances[i].text));
+          let matches = 0;
+          for (const w of needle) if (hay.has(w)) matches++;
+          const score = matches / Math.max(needle.size, 1);
+          if (score > bestScore && score >= 0.3) {
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
+        return bestIdx;
+      }
+
+      let lastEndIdx = 0;
       const sectionRows = analysis.sections.map(
         (s: {
           type: string;
@@ -149,28 +178,26 @@ export async function POST(request: Request) {
           grade: string;
           order_index: number;
         }) => {
-          // Find approximate timestamps from utterances by text matching
-          const searchStart = s.start_text?.toLowerCase().slice(0, 20) ?? "";
-          const searchEnd = s.end_text?.toLowerCase().slice(0, 20) ?? "";
+          let startIdx = findBestUtteranceIndex(s.start_text, lastEndIdx);
+          let endIdx = findBestUtteranceIndex(s.end_text, Math.max(startIdx, lastEndIdx));
 
-          const startUtterance = searchStart
-            ? utterances.find((u) => u.text.toLowerCase().includes(searchStart))
-            : null;
-          const endUtterance = searchEnd
-            ? [...utterances].reverse().find((u) => u.text.toLowerCase().includes(searchEnd))
-            : null;
+          // Proportional fallback if fuzzy matching didn't find anything
+          if (startIdx < 0) {
+            startIdx = totalUtterances > 0
+              ? Math.min(Math.floor((s.order_index / Math.max(totalSections, 1)) * totalUtterances), totalUtterances - 1)
+              : 0;
+          }
+          if (endIdx < 0 || endIdx < startIdx) {
+            endIdx = totalUtterances > 0
+              ? Math.min(Math.floor(((s.order_index + 1) / Math.max(totalSections, 1)) * totalUtterances) - 1, totalUtterances - 1)
+              : 0;
+            if (endIdx < startIdx) endIdx = startIdx;
+          }
 
-          // Fallback: estimate position proportionally from order_index
-          const proportionStart = totalUtterances > 0
-            ? utterances[Math.floor((s.order_index / totalSections) * totalUtterances)]?.startMs ?? lastEndMs
-            : lastEndMs;
-          const proportionEnd = totalUtterances > 0
-            ? utterances[Math.min(Math.floor(((s.order_index + 1) / totalSections) * totalUtterances), totalUtterances - 1)]?.endMs ?? 0
-            : 0;
-
-          const startMs = startUtterance?.startMs ?? proportionStart;
-          const endMs = endUtterance?.endMs ?? proportionEnd;
+          const startMs = utterances[startIdx]?.startMs ?? lastEndMs;
+          const endMs = utterances[endIdx]?.endMs ?? startMs;
           lastEndMs = endMs;
+          lastEndIdx = endIdx;
 
           return {
             call_id: callId,
@@ -198,9 +225,30 @@ export async function POST(request: Request) {
           handling_grade: string;
           suggestion: string;
         }) => {
-          const matchingUtterance = utterances.find((u) =>
-            u.text.toLowerCase().includes(o.utterance_text?.toLowerCase().slice(0, 30) ?? "")
+          // Token-overlap search is more robust than substring match for paraphrased text.
+          const needle = new Set(
+            (o.utterance_text ?? "")
+              .toLowerCase()
+              .replace(/[^a-z0-9\s']/g, " ")
+              .split(/\s+/)
+              .filter((w) => w.length > 2)
           );
+          let bestUtterance: typeof utterances[0] | null = null;
+          let bestScore = 0;
+          if (needle.size > 0) {
+            for (const u of utterances) {
+              const hay = new Set(
+                u.text.toLowerCase().replace(/[^a-z0-9\s']/g, " ").split(/\s+/).filter((w) => w.length > 2)
+              );
+              let matches = 0;
+              for (const w of needle) if (hay.has(w)) matches++;
+              const score = matches / needle.size;
+              if (score > bestScore && score >= 0.3) {
+                bestScore = score;
+                bestUtterance = u;
+              }
+            }
+          }
 
           return {
             call_id: callId,
@@ -210,8 +258,8 @@ export async function POST(request: Request) {
             rep_response: o.rep_response,
             handling_grade: o.handling_grade,
             suggestion: o.suggestion,
-            start_ms: matchingUtterance?.startMs ?? 0,
-            end_ms: matchingUtterance?.endMs ?? 0,
+            start_ms: bestUtterance?.startMs ?? 0,
+            end_ms: bestUtterance?.endMs ?? 0,
           };
         }
       );

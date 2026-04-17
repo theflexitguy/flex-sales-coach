@@ -34,10 +34,12 @@ function RecordingView({ isManager }: { isManager: boolean }) {
     chunkCount,
     uploadedChunks,
     totalChunks,
+    meteringDb,
     error,
     startDay,
     stopAndName,
     updateElapsed,
+    updateMetering,
   } = useRecordingStore();
 
   const [showStopModal, setShowStopModal] = useState(false);
@@ -48,7 +50,10 @@ function RecordingView({ isManager }: { isManager: boolean }) {
   // Update elapsed time every second — pause when modal is open
   useEffect(() => {
     if (isRecording && !showStopModal) {
-      timerRef.current = setInterval(updateElapsed, 1000);
+      timerRef.current = setInterval(() => {
+        updateElapsed();
+        updateMetering();
+      }, 500);
     } else if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -151,6 +156,25 @@ function RecordingView({ isManager }: { isManager: boolean }) {
             {showStopModal ? "Paused" : "Recording"}
           </Text>
           <Text style={styles.timer}>{displayTime}</Text>
+
+          {isRecording && !showStopModal && (
+            <View style={styles.meterRow}>
+              <View style={styles.meterBar}>
+                <View
+                  style={[
+                    styles.meterFill,
+                    {
+                      width: `${Math.max(0, Math.min(100, Math.round(((meteringDb + 60) / 60) * 100)))}%` as `${number}%`,
+                      backgroundColor: meteringDb > -6 ? "#ef4444" : meteringDb > -24 ? "#22c55e" : "#71717a",
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.meterLabel}>
+                {meteringDb <= -60 ? "No audio" : meteringDb > -6 ? "Too loud" : "Picking up audio"}
+              </Text>
+            </View>
+          )}
 
           <View style={styles.statsRow}>
             <View style={styles.stat}>
@@ -362,6 +386,28 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   progressFill: { height: "100%", backgroundColor: "#35b2ff", borderRadius: 2 },
+  meterRow: {
+    width: "80%",
+    alignItems: "center",
+    marginTop: 16,
+    gap: 6,
+  },
+  meterBar: {
+    width: "100%",
+    height: 6,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  meterFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  meterLabel: {
+    color: "#71717a",
+    fontSize: 11,
+    fontWeight: "500" as const,
+  },
   stopButton: {
     flexDirection: "row",
     alignItems: "center",

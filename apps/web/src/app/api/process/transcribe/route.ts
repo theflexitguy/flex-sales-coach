@@ -64,19 +64,61 @@ export async function POST(request: Request) {
     const utterances = dgResult.results?.utterances ?? [];
     const requestId = dgResult.metadata?.request_id ?? null;
 
-    // Map Deepgram speakers to rep/customer
-    // Heuristic: speaker 0 is whoever talks first (usually the rep knocking on the door)
-    const speakerMap: Record<number, "rep" | "customer"> = { 0: "rep", 1: "customer" };
+    // Map Deepgram speakers to rep/customer using content heuristics.
+    // The rep typically: introduces themselves ("My name is", "I'm with"), mentions the
+    // company/product, asks permission-style questions ("Do you have a minute"),
+    // and talks significantly more (pitching). The customer is reactive and shorter.
+    interface DgUtterance {
+      speaker: number;
+      start: number;
+      end: number;
+      transcript: string;
+      confidence: number;
+    }
+    const typedUtterances = utterances as DgUtterance[];
 
-    const mappedUtterances = utterances.map(
-      (u: { speaker: number; start: number; end: number; transcript: string; confidence: number }) => ({
-        speaker: speakerMap[u.speaker] ?? "unknown",
-        startMs: Math.round(u.start * 1000),
-        endMs: Math.round(u.end * 1000),
-        text: u.transcript,
-        confidence: u.confidence,
-      })
-    );
+    function scoreAsRep(utts: DgUtterance[]): number {
+      const text = utts.map((u) => u.transcript).join(" ").toLowerCase();
+      const totalWords = text.split(/\s+/).filter(Boolean).length;
+      let score = 0;
+      // Introduction phrases (strong rep signal)
+      if (/\b(my name is|i'?m (?:with|from)|this is) /i.test(text)) score += 5;
+      // Product / sales phrases
+      if (/\b(pest control|mosquito|spray|service|protect|treatment|lawn|termite)\b/i.test(text)) score += 3;
+      if (/\b(special|discount|promotion|offer|free estimate|quote)\b/i.test(text)) score += 2;
+      // Permission / opener phrases
+      if (/\b(quick question|minute of your time|real quick|got a second)\b/i.test(text)) score += 2;
+      if (/\b(hey there|hi there|how'?s it going|good (?:morning|afternoon|evening))\b/i.test(text)) score += 1;
+      // Word count bonus: rep usually talks 2-3x more
+      score += Math.min(totalWords / 50, 5);
+      return score;
+    }
+
+    const speakerUtterances = new Map<number, DgUtterance[]>();
+    for (const u of typedUtterances) {
+      if (!speakerUtterances.has(u.speaker)) speakerUtterances.set(u.speaker, []);
+      speakerUtterances.get(u.speaker)!.push(u);
+    }
+
+    let repSpeaker = 0;
+    if (speakerUtterances.size >= 2) {
+      let bestScore = -Infinity;
+      for (const [spk, utts] of speakerUtterances) {
+        const score = scoreAsRep(utts);
+        if (score > bestScore) {
+          bestScore = score;
+          repSpeaker = spk;
+        }
+      }
+    }
+
+    const mappedUtterances = typedUtterances.map((u) => ({
+      speaker: u.speaker === repSpeaker ? "rep" : "customer" as const,
+      startMs: Math.round(u.start * 1000),
+      endMs: Math.round(u.end * 1000),
+      text: u.transcript,
+      confidence: u.confidence,
+    }));
 
     const fullText = mappedUtterances
       .map((u: { speaker: string; text: string }) => `[${u.speaker}] ${u.text}`)
