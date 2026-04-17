@@ -135,7 +135,7 @@ export function CompareView() {
                         <span className="text-xs text-zinc-400 capitalize">{o.category}</span>
                         <span className="text-xs" style={{ color: GRADE_COLORS[o.handlingGrade] }}>{GRADE_LABELS[o.handlingGrade]}</span>
                       </div>
-                      <p className="text-xs text-zinc-300 italic">"{o.utteranceText}"</p>
+                      <p className="text-xs text-zinc-300 italic">&ldquo;{o.utteranceText}&rdquo;</p>
                     </div>
                   ))}
                 </div>

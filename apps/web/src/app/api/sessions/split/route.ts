@@ -26,7 +26,8 @@ function shq(s: string): string {
 // split with a corroborating signal: GPS movement or a speaker change.
 const SPEECH_GAP_S = 20;                  // min silence between words to consider a split
 const INTER_HOUSE_DISTANCE_M = 40;        // movement that likely means "next house"
-const BACKYARD_MAX_M = 30;                // typical limit of staying on one property
+                                          // (backyard walks are typically <30m; this threshold
+                                          // keeps same-property moves from splitting)
 const FORCED_SPLIT_DISTANCE_M = 50;       // movement alone triggers a split if no speech gap
 const FORCED_SPLIT_WINDOW_S = 90;         // within this time window
 const MIN_CONVERSATION_S = 5;             // ignore slivers

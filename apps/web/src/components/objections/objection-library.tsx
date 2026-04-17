@@ -29,22 +29,21 @@ export function ObjectionLibrary() {
   const [examples, setExamples] = useState<ObjectionItem[]>([]);
 
   useEffect(() => {
+    async function fetchData() {
+      const params = new URLSearchParams();
+      if (activeCategory) params.set("category", activeCategory);
+      if (gradeFilter) params.set("grade", gradeFilter);
+      if (search) params.set("search", search);
+
+      const res = await fetch(`/api/objections/library?${params}`);
+      const data = await res.json();
+      setObjections(data.objections ?? []);
+      setCategoryCounts(data.categoryCounts ?? {});
+      setBestPractices(data.bestPractices ?? []);
+      setLoading(false);
+    }
     fetchData();
   }, [activeCategory, gradeFilter, search]);
-
-  async function fetchData() {
-    const params = new URLSearchParams();
-    if (activeCategory) params.set("category", activeCategory);
-    if (gradeFilter) params.set("grade", gradeFilter);
-    if (search) params.set("search", search);
-
-    const res = await fetch(`/api/objections/library?${params}`);
-    const data = await res.json();
-    setObjections(data.objections ?? []);
-    setCategoryCounts(data.categoryCounts ?? {});
-    setBestPractices(data.bestPractices ?? []);
-    setLoading(false);
-  }
 
   async function showExamples(category: string) {
     setExamplesFor(category);

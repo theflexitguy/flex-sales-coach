@@ -94,7 +94,7 @@ export function ScenarioManager() {
           <div>
             <h2 className="text-lg font-semibold text-white">Customer Personas</h2>
             <p className="text-sm text-zinc-500 mt-0.5">
-              AI-generated from your team's real call data
+              AI-generated from your team&apos;s real call data
             </p>
           </div>
           <button
@@ -122,7 +122,7 @@ export function ScenarioManager() {
           <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-12 text-center">
             <p className="text-zinc-400">No personas yet</p>
             <p className="text-zinc-500 text-sm mt-1">
-              Generate personas from your team's call data to create AI training bots
+              Generate personas from your team&apos;s call data to create AI training bots
             </p>
           </div>
         ) : (
