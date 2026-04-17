@@ -26,7 +26,7 @@ export interface UploadErrorRecord {
   sessionId: string;
   chunkIndex: number;
   retries: number;
-  stage: "auth" | "storage" | "metadata" | "unknown";
+  stage: "auth" | "storage" | "metadata" | "recorder" | "unknown";
   message: string;
 }
 
@@ -123,6 +123,29 @@ class UploadQueue {
       tokenValid,
       userId,
     };
+  }
+
+  /**
+   * Record a non-upload event (e.g. recorder interruption, watchdog action).
+   * Surfaces on the Diagnostics screen so we can see what's happening inside
+   * the recording pipeline without an attached debugger.
+   */
+  recordRecorderEvent(sessionId: string, chunkIndex: number, message: string): void {
+    const record: UploadErrorRecord = {
+      at: Date.now(),
+      sessionId,
+      chunkIndex,
+      retries: 0,
+      stage: "recorder",
+      message,
+    };
+    this.errors.unshift(record);
+    if (this.errors.length > ERROR_RING_SIZE) {
+      this.errors.length = ERROR_RING_SIZE;
+    }
+    this.persistErrors().catch(() => {
+      // best-effort — diagnostics persistence isn't critical
+    });
   }
 
   async clearErrors(): Promise<void> {
