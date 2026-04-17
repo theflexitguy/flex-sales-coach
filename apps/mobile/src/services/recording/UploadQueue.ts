@@ -169,21 +169,33 @@ class UploadQueue {
       throw new Error("No auth session");
     }
 
-    // Step 1: Upload audio directly to Supabase storage (bypasses Vercel body limit)
+    // Step 1: Upload audio directly to Supabase storage REST endpoint via
+    // native fetch + FormData. Using supabase.storage.upload() was failing
+    // silently in production iOS builds — going to the raw endpoint with
+    // the platform's native multipart upload is more reliable.
     const storagePath = `${job.sessionId}/${job.chunkIndex}.m4a`;
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const storageUrl = `${supabaseUrl}/storage/v1/object/recording-chunks/${storagePath}`;
+
     const uploadForm = new FormData();
-    uploadForm.append("", {
+    uploadForm.append("file", {
       uri: job.uri,
       name: `${job.chunkIndex}.m4a`,
       type: "audio/mp4",
     } as unknown as Blob);
 
-    const { error: uploadError } = await supabase.storage
-      .from("recording-chunks")
-      .upload(storagePath, uploadForm, { contentType: "multipart/form-data", upsert: true });
+    const uploadRes = await fetch(storageUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "x-upsert": "true",
+      },
+      body: uploadForm,
+    });
 
-    if (uploadError) {
-      throw new Error(`Storage upload: ${uploadError.message}`);
+    if (!uploadRes.ok) {
+      const text = await uploadRes.text().catch(() => "");
+      throw new Error(`Storage upload ${uploadRes.status}: ${text.slice(0, 200)}`);
     }
 
     // Step 2: Register the chunk metadata via lightweight API call (no file body)
