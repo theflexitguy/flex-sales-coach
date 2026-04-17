@@ -95,21 +95,33 @@ export async function POST(request: Request) {
         .map((d) => d.path);
 
       // Normalize each chunk to a common WAV format first.
-      // This works around chunks that may have different codec params (AAC vs
-      // LPCM, different sample rates, etc.) — the concat demuxer is strict
-      // about input uniformity.
+      // iOS expo-audio sometimes outputs 'ipcm' (interleaved PCM in MP4) which
+      // FFmpeg's auto-probe doesn't recognize without bigger probe windows.
+      // -analyzeduration/probesize force it to read enough bytes to identify.
       const normalizedPaths: string[] = [];
       for (const chunkPath of chunkPaths) {
         const normalizedPath = chunkPath.replace(/\.m4a$/, ".wav");
         try {
           execSync(
-            `${shq(FFMPEG)} -i ${shq(chunkPath)} -ac 1 -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
+            `${shq(FFMPEG)} -analyzeduration 100M -probesize 100M -i ${shq(chunkPath)} -ac 1 -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
             { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
           );
           normalizedPaths.push(normalizedPath);
         } catch (err) {
           const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
-          throw new Error(`ffmpeg normalize chunk failed: ${stderr.slice(-500)}`);
+          // Fallback: try again with explicit raw PCM input spec.
+          // If the MP4 container's codec tag is 'ipcm' (Apple interleaved PCM),
+          // old FFmpeg builds need to be told it's raw signed 16-bit little-endian PCM.
+          try {
+            execSync(
+              `${shq(FFMPEG)} -f s16le -ar 44100 -ac 1 -i ${shq(chunkPath)} -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
+              { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
+            );
+            normalizedPaths.push(normalizedPath);
+          } catch (err2) {
+            const stderr2 = (err2 as { stderr?: Buffer }).stderr?.toString() ?? "";
+            throw new Error(`ffmpeg normalize failed: ${stderr.slice(-250)} | fallback: ${stderr2.slice(-250)}`);
+          }
         }
       }
 

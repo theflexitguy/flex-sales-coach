@@ -9,9 +9,9 @@ import {
 
 type AudioRecorder = InstanceType<typeof AudioModule.AudioRecorder>;
 
-// Explicit AAC config — the HIGH_QUALITY preset sometimes falls back to LPCM
-// on iOS, producing files 20x larger (170KB/s raw PCM vs 8KB/s AAC) that
-// FFmpeg can't concat because the codec params get reset between chunks.
+// Explicit AAC config. iOS will otherwise fall back to 'ipcm' (interleaved PCM
+// in an MP4 container) which FFmpeg can't decode. Keep iOS options minimal —
+// the LinearPCM fields seem to confuse the encoder into picking PCM.
 const RECORDING_OPTIONS: RecordingOptions = {
   isMeteringEnabled: true,
   extension: ".m4a",
@@ -25,9 +25,6 @@ const RECORDING_OPTIONS: RecordingOptions = {
   ios: {
     outputFormat: IOSOutputFormat.MPEG4AAC,
     audioQuality: AudioQuality.MEDIUM,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
   },
   web: {
     mimeType: "audio/mp4",
