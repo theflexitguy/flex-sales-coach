@@ -73,6 +73,9 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       uploadQueue.setOnStatusChange((uploaded, total) => {
         set({ uploadedChunks: uploaded, totalChunks: total });
       });
+      uploadQueue.setOnError((msg) => {
+        set({ error: `Upload: ${msg}` });
+      });
 
       // Start recording
       await chunkManager.startSession(sessionId);

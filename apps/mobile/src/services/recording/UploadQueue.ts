@@ -28,8 +28,10 @@ class UploadQueue {
   private processing = false;
   private isOnline = true;
   private onStatusChange?: (uploaded: number, total: number) => void;
+  private onError?: (msg: string) => void;
   private uploadedCount = 0;
   private pendingCompletes: PendingComplete[] = [];
+  private lastError: string | null = null;
 
   constructor() {
     // Listen for network changes
@@ -45,6 +47,14 @@ class UploadQueue {
 
   setOnStatusChange(callback: (uploaded: number, total: number) => void) {
     this.onStatusChange = callback;
+  }
+
+  setOnError(callback: (msg: string) => void) {
+    this.onError = callback;
+  }
+
+  getLastError(): string | null {
+    return this.lastError;
   }
 
   async restore(): Promise<void> {
@@ -138,6 +148,8 @@ class UploadQueue {
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`Upload failed for chunk ${job.chunkIndex}: ${msg}`);
+      this.lastError = `Chunk ${job.chunkIndex}: ${msg}`;
+      this.onError?.(this.lastError);
 
       if (job.retries >= MAX_RETRIES) {
         this.queue.shift();
@@ -169,33 +181,26 @@ class UploadQueue {
       throw new Error("No auth session");
     }
 
-    // Step 1: Upload audio directly to Supabase storage REST endpoint via
-    // native fetch + FormData. Using supabase.storage.upload() was failing
-    // silently in production iOS builds — going to the raw endpoint with
-    // the platform's native multipart upload is more reliable.
+    // Use the SAME upload pattern as voice notes (which work in production).
+    // FormData with empty field name + supabase.storage.upload() +
+    // contentType: "multipart/form-data".
     const storagePath = `${job.sessionId}/${job.chunkIndex}.m4a`;
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const storageUrl = `${supabaseUrl}/storage/v1/object/recording-chunks/${storagePath}`;
-
     const uploadForm = new FormData();
-    uploadForm.append("file", {
+    uploadForm.append("", {
       uri: job.uri,
       name: `${job.chunkIndex}.m4a`,
       type: "audio/mp4",
     } as unknown as Blob);
 
-    const uploadRes = await fetch(storageUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "x-upsert": "true",
-      },
-      body: uploadForm,
-    });
+    const { error: uploadError } = await supabase.storage
+      .from("recording-chunks")
+      .upload(storagePath, uploadForm, {
+        contentType: "multipart/form-data",
+        upsert: true,
+      });
 
-    if (!uploadRes.ok) {
-      const text = await uploadRes.text().catch(() => "");
-      throw new Error(`Storage upload ${uploadRes.status}: ${text.slice(0, 200)}`);
+    if (uploadError) {
+      throw new Error(`Storage upload: ${uploadError.message ?? JSON.stringify(uploadError)}`);
     }
 
     // Step 2: Register the chunk metadata via lightweight API call (no file body)
