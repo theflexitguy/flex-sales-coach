@@ -8,6 +8,17 @@ import { writeFileSync, readFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+
+// Bundled FFmpeg binaries — required because Vercel Functions don't have
+// system ffmpeg installed.
+const FFMPEG = ffmpegInstaller.path;
+const FFPROBE = ffprobeInstaller.path;
+
+function shq(s: string): string {
+  return `"${s.replace(/"/g, '\\"')}"`;
+}
 
 const SILENCE_THRESHOLD_DB = -25; // -25dB accounts for ambient outdoor/bag noise
 const SILENCE_DURATION_S = 12;   // 12 seconds of silence = conversation boundary
@@ -90,24 +101,30 @@ export async function POST(request: Request) {
         .join("\n");
       writeFileSync(concatListPath, concatContent);
 
-      // Concatenate all chunks
+      // Concatenate all chunks.
+      // Use re-encode (not -c copy) because expo-audio chunks can have slightly
+      // different codec params across recordings which makes concat demuxer fail.
       const concatPath = join(workDir, "full_recording.m4a");
-      execSync(
-        `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy "${concatPath}" -y 2>/dev/null`,
-        { timeout: 240000 }
-      );
-
-      // Detect silences
-      let silenceOutput: string;
       try {
         execSync(
-          `ffmpeg -i "${concatPath}" -af silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${SILENCE_DURATION_S} -f null - 2>&1`,
-          { timeout: 120000, encoding: "utf-8" }
+          `${shq(FFMPEG)} -f concat -safe 0 -i ${shq(concatListPath)} -c:a aac -b:a 64k ${shq(concatPath)} -y`,
+          { timeout: 240000, stdio: ["ignore", "ignore", "pipe"] }
         );
-        silenceOutput = "";
+      } catch (err) {
+        const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+        throw new Error(`ffmpeg concat failed: ${stderr.slice(-500)}`);
+      }
+
+      // Detect silences — FFmpeg always writes analysis to stderr
+      let silenceOutput = "";
+      try {
+        const out = execSync(
+          `${shq(FFMPEG)} -i ${shq(concatPath)} -af silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${SILENCE_DURATION_S} -f null -`,
+          { timeout: 240000, stdio: ["ignore", "pipe", "pipe"] }
+        );
+        silenceOutput = out.toString();
       } catch (e: unknown) {
-        // FFmpeg outputs to stderr which causes execSync to "fail" — but the output is in the error
-        silenceOutput = (e as { stderr?: string; stdout?: string }).stderr ?? (e as Error).message ?? "";
+        silenceOutput = (e as { stderr?: Buffer }).stderr?.toString() ?? "";
       }
 
       // Parse silence boundaries
@@ -123,8 +140,8 @@ export async function POST(request: Request) {
 
       // Get total duration
       const durationOutput = execSync(
-        `ffprobe -v error -show_entries format=duration -of csv=p=0 "${concatPath}"`,
-        { encoding: "utf-8", timeout: 10000 }
+        `${shq(FFPROBE)} -v error -show_entries format=duration -of csv=p=0 ${shq(concatPath)}`,
+        { encoding: "utf-8", timeout: 30000 }
       ).trim();
       const totalDuration = parseFloat(durationOutput) || 0;
 
@@ -166,7 +183,7 @@ export async function POST(request: Request) {
 
         const segPath = join(workDir, `segment_${i}.m4a`);
         execSync(
-          `ffmpeg -i "${concatPath}" -ss ${trimmedStart} -to ${trimmedEnd} -c copy "${segPath}" -y 2>/dev/null`,
+          `${shq(FFMPEG)} -i ${shq(concatPath)} -ss ${trimmedStart} -to ${trimmedEnd} -c copy ${shq(segPath)} -y`,
           { timeout: 30000 }
         );
 
