@@ -1,7 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
+import * as FileSystem from "expo-file-system/legacy";
 import { API_BASE_URL } from "../../constants/recording";
 import { supabase } from "../../lib/supabase";
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 
 interface ChunkUploadJob {
   sessionId: string;
@@ -18,10 +21,35 @@ interface PendingComplete {
   label: string;
 }
 
+export interface UploadErrorRecord {
+  at: number;
+  sessionId: string;
+  chunkIndex: number;
+  retries: number;
+  stage: "auth" | "storage" | "metadata" | "unknown";
+  message: string;
+}
+
+export interface UploadDiagnostics {
+  apiBaseUrl: string;
+  queueSize: number;
+  uploadedCount: number;
+  pendingCompletes: PendingComplete[];
+  isOnline: boolean;
+  processing: boolean;
+  lastError: string | null;
+  errors: UploadErrorRecord[];
+  tokenExpiry: number | null;
+  tokenValid: boolean;
+  userId: string | null;
+}
+
 const STORAGE_KEY = "flex_upload_queue";
 const COMPLETE_KEY = "flex_pending_completes";
+const ERRORS_KEY = "flex_upload_errors";
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
+const ERROR_RING_SIZE = 20;
 
 class UploadQueue {
   private queue: ChunkUploadJob[] = [];
@@ -29,9 +57,12 @@ class UploadQueue {
   private isOnline = true;
   private onStatusChange?: (uploaded: number, total: number) => void;
   private onError?: (msg: string) => void;
+  private onFirstError?: (record: UploadErrorRecord) => void;
   private uploadedCount = 0;
   private pendingCompletes: PendingComplete[] = [];
   private lastError: string | null = null;
+  private errors: UploadErrorRecord[] = [];
+  private alertedForSessions = new Set<string>();
 
   constructor() {
     // Listen for network changes
@@ -53,21 +84,72 @@ class UploadQueue {
     this.onError = callback;
   }
 
+  setOnFirstError(callback: (record: UploadErrorRecord) => void) {
+    this.onFirstError = callback;
+  }
+
   getLastError(): string | null {
     return this.lastError;
   }
 
+  getErrors(): UploadErrorRecord[] {
+    return [...this.errors];
+  }
+
+  async getDiagnostics(): Promise<UploadDiagnostics> {
+    let tokenExpiry: number | null = null;
+    let tokenValid = false;
+    let userId: string | null = null;
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        tokenExpiry = data.session.expires_at ?? null;
+        tokenValid = tokenExpiry ? tokenExpiry * 1000 > Date.now() : false;
+        userId = data.session.user?.id ?? null;
+      }
+    } catch {
+      // ignore
+    }
+    return {
+      apiBaseUrl: API_BASE_URL,
+      queueSize: this.queue.length,
+      uploadedCount: this.uploadedCount,
+      pendingCompletes: [...this.pendingCompletes],
+      isOnline: this.isOnline,
+      processing: this.processing,
+      lastError: this.lastError,
+      errors: [...this.errors],
+      tokenExpiry,
+      tokenValid,
+      userId,
+    };
+  }
+
+  async clearErrors(): Promise<void> {
+    this.errors = [];
+    this.alertedForSessions.clear();
+    try {
+      await AsyncStorage.removeItem(ERRORS_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
   async restore(): Promise<void> {
     try {
-      const [stored, completes] = await Promise.all([
+      const [stored, completes, errors] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEY),
         AsyncStorage.getItem(COMPLETE_KEY),
+        AsyncStorage.getItem(ERRORS_KEY),
       ]);
       if (stored) {
         this.queue = JSON.parse(stored);
       }
       if (completes) {
         this.pendingCompletes = JSON.parse(completes);
+      }
+      if (errors) {
+        this.errors = JSON.parse(errors);
       }
       if (this.queue.length > 0) {
         this.processNext();
@@ -147,9 +229,31 @@ class UploadQueue {
       this.emitStatus();
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error(`Upload failed for chunk ${job.chunkIndex}: ${msg}`);
-      this.lastError = `Chunk ${job.chunkIndex}: ${msg}`;
+      const stage: UploadErrorRecord["stage"] =
+        error instanceof UploadStageError ? error.stage : "unknown";
+      console.error(`Upload failed for chunk ${job.chunkIndex} [${stage}]: ${msg}`);
+      this.lastError = `Chunk ${job.chunkIndex} [${stage}]: ${msg}`;
       this.onError?.(this.lastError);
+
+      const record: UploadErrorRecord = {
+        at: Date.now(),
+        sessionId: job.sessionId,
+        chunkIndex: job.chunkIndex,
+        retries: job.retries,
+        stage,
+        message: msg,
+      };
+      this.errors.unshift(record);
+      if (this.errors.length > ERROR_RING_SIZE) {
+        this.errors.length = ERROR_RING_SIZE;
+      }
+      await this.persistErrors();
+
+      // Fire Alert callback on first failure per session so user sees a real message
+      if (!this.alertedForSessions.has(job.sessionId)) {
+        this.alertedForSessions.add(job.sessionId);
+        this.onFirstError?.(record);
+      }
 
       if (job.retries >= MAX_RETRIES) {
         this.queue.shift();
@@ -178,36 +282,58 @@ class UploadQueue {
     } = await supabase.auth.getSession();
 
     if (!session?.access_token) {
-      throw new Error("No auth session");
+      throw new UploadStageError("auth", "No auth session");
     }
 
-    // Use the SAME upload pattern as voice notes (which work in production).
-    // FormData with empty field name + supabase.storage.upload() +
-    // contentType: "multipart/form-data".
+    if (!SUPABASE_URL) {
+      throw new UploadStageError("auth", "EXPO_PUBLIC_SUPABASE_URL missing");
+    }
+
+    // Verify the chunk file still exists on disk before upload. If the OS
+    // evicted it (rare but possible), this is an unrecoverable error — skip it.
+    const info = await FileSystem.getInfoAsync(job.uri);
+    if (!info.exists) {
+      throw new UploadStageError("storage", `chunk file missing: ${job.uri}`);
+    }
+
+    // Upload directly to Supabase Storage REST via native URLSession (iOS) /
+    // OkHttp (Android). This bypasses JS fetch, FormData, and any Hermes
+    // bundling quirks — the cause of past TestFlight-only upload failures.
     const storagePath = `${job.sessionId}/${job.chunkIndex}.m4a`;
-    const uploadForm = new FormData();
-    uploadForm.append("", {
-      uri: job.uri,
-      name: `${job.chunkIndex}.m4a`,
-      type: "audio/mp4",
-    } as unknown as Blob);
+    const uploadUrl = `${SUPABASE_URL}/storage/v1/object/recording-chunks/${storagePath}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from("recording-chunks")
-      .upload(storagePath, uploadForm, {
-        contentType: "multipart/form-data",
-        upsert: true,
-      });
+    const uploadRes = await FileSystem.uploadAsync(uploadUrl, job.uri, {
+      httpMethod: "POST",
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "audio/mp4",
+        "x-upsert": "true",
+        apikey: session.access_token,
+      },
+    });
 
-    if (uploadError) {
-      throw new Error(`Storage upload: ${uploadError.message ?? JSON.stringify(uploadError)}`);
+    if (uploadRes.status < 200 || uploadRes.status >= 300) {
+      // Surface the Supabase error body so the Diagnostics screen shows the real reason
+      const body = uploadRes.body?.slice(0, 400) ?? "";
+      throw new UploadStageError(
+        "storage",
+        `HTTP ${uploadRes.status}: ${body || "no body"}`
+      );
     }
+
+    // Refresh session before metadata POST — step 1 may have taken 30s+ on slow networks,
+    // and the server verifies the bearer token against auth.users.
+    const {
+      data: { session: freshSession },
+    } = await supabase.auth.getSession();
+    const token = freshSession?.access_token ?? session.access_token;
 
     // Step 2: Register the chunk metadata via lightweight API call (no file body)
     const res = await fetch(`${API_BASE_URL}/api/sessions/chunk`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -229,7 +355,7 @@ class UploadQueue {
       } catch {
         errMsg = text.slice(0, 200) || errMsg;
       }
-      throw new Error(errMsg);
+      throw new UploadStageError("metadata", `${res.status}: ${errMsg}`);
     }
   }
 
@@ -249,6 +375,14 @@ class UploadQueue {
     }
   }
 
+  private async persistErrors(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(ERRORS_KEY, JSON.stringify(this.errors));
+    } catch {
+      // ignore
+    }
+  }
+
   private emitStatus(): void {
     this.onStatusChange?.(this.uploadedCount, this.uploadedCount + this.queue.length);
   }
@@ -263,6 +397,16 @@ class UploadQueue {
 
   resetCounts(): void {
     this.uploadedCount = 0;
+  }
+}
+
+class UploadStageError extends Error {
+  constructor(
+    readonly stage: UploadErrorRecord["stage"],
+    message: string
+  ) {
+    super(message);
+    this.name = "UploadStageError";
   }
 }
 

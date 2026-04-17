@@ -1,9 +1,11 @@
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuthStore();
+  const router = useRouter();
 
   return (
     <View style={styles.container}>
@@ -29,6 +31,15 @@ export default function ProfileScreen() {
           <Text style={styles.infoValue}>Flex Sales Team</Text>
         </View>
       </View>
+
+      <TouchableOpacity
+        style={styles.linkRow}
+        onPress={() => router.push("/diagnostics")}
+      >
+        <Ionicons name="pulse-outline" size={20} color="#35b2ff" />
+        <Text style={styles.linkRowText}>Diagnostics</Text>
+        <Ionicons name="chevron-forward" size={18} color="#52525b" />
+      </TouchableOpacity>
 
       <TouchableOpacity style={styles.signOutButton} onPress={signOut}>
         <Ionicons name="log-out-outline" size={20} color="#f87171" />
@@ -105,6 +116,23 @@ const styles = StyleSheet.create({
   infoValue: {
     color: "#d4d4d8",
     fontSize: 14,
+    fontWeight: "500",
+  },
+  linkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#18181b",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    padding: 16,
+    marginBottom: 12,
+  },
+  linkRowText: {
+    flex: 1,
+    color: "#d4d4d8",
+    fontSize: 15,
     fontWeight: "500",
   },
   signOutButton: {

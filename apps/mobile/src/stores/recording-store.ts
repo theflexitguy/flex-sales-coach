@@ -1,3 +1,4 @@
+import { Alert } from "react-native";
 import { create } from "zustand";
 import { chunkManager } from "../services/recording/ChunkManager";
 import { uploadQueue } from "../services/recording/UploadQueue";
@@ -75,6 +76,12 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       });
       uploadQueue.setOnError((msg) => {
         set({ error: `Upload: ${msg}` });
+      });
+      uploadQueue.setOnFirstError((record) => {
+        Alert.alert(
+          "Upload Problem",
+          `Chunk ${record.chunkIndex} failed at ${record.stage}: ${record.message}\n\nWe'll keep retrying. Open Profile → Diagnostics for details.`
+        );
       });
 
       // Start recording

@@ -2,9 +2,28 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 
+function logChunk(
+  status: number,
+  reason: string,
+  ctx: Record<string, unknown>
+): void {
+  const level = status >= 500 ? "error" : status >= 400 ? "warn" : "info";
+  console[level](
+    JSON.stringify({
+      route: "/api/sessions/chunk",
+      status,
+      reason,
+      ...ctx,
+    })
+  );
+}
+
 export async function POST(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth) {
+    logChunk(401, "unauthorized", {
+      hasAuthHeader: !!request.headers.get("authorization"),
+    });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -36,6 +55,13 @@ export async function POST(request: Request) {
     const audioFile = formData.get("audio") as File | null;
 
     if (!audioFile || audioFile.size === 0) {
+      logChunk(400, "audio_missing", {
+        userId: auth.user.id,
+        sessionId,
+        chunkIndex,
+        hasFile: !!audioFile,
+        size: audioFile?.size ?? 0,
+      });
       return NextResponse.json({ error: "Audio file missing or empty" }, { status: 400 });
     }
 
@@ -50,11 +76,23 @@ export async function POST(request: Request) {
       });
 
     if (uploadError) {
+      logChunk(500, "server_upload_failed", {
+        userId: auth.user.id,
+        sessionId,
+        chunkIndex,
+        storagePath,
+        supabaseError: uploadError.message,
+      });
       return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
     }
   }
 
   if (!sessionId || isNaN(chunkIndex)) {
+    logChunk(400, "missing_fields", {
+      userId: auth.user.id,
+      hasSessionId: !!sessionId,
+      chunkIndex,
+    });
     return NextResponse.json({ error: "Missing sessionId or chunkIndex" }, { status: 400 });
   }
 
@@ -68,6 +106,14 @@ export async function POST(request: Request) {
     .single();
 
   if (!session || session.rep_id !== auth.user.id) {
+    logChunk(404, "session_not_found_or_not_owned", {
+      userId: auth.user.id,
+      sessionId,
+      chunkIndex,
+      storagePath,
+      sessionExists: !!session,
+      sessionRepId: session?.rep_id ?? null,
+    });
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
@@ -101,5 +147,12 @@ export async function POST(request: Request) {
     })
     .eq("id", sessionId);
 
+  logChunk(200, "ok", {
+    userId: auth.user.id,
+    sessionId,
+    chunkIndex,
+    storagePath,
+    totalChunks,
+  });
   return NextResponse.json({ success: true, chunkIndex, totalChunks });
 }

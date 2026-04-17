@@ -89,7 +89,7 @@ function RecordingView({ isManager }: { isManager: boolean }) {
     haptic.success();
     Alert.alert(
       "Session Saved",
-      "Your recording is uploading in the background. You can start a new recording right away."
+      "Uploading in the background. It may take a minute for the conversation to appear in Calls. If something goes wrong, you'll see it on this screen or in Profile → Diagnostics."
     );
   }
 

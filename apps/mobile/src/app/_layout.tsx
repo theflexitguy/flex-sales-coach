@@ -78,6 +78,16 @@ export default function RootLayout() {
             presentation: "modal",
           }}
         />
+        <Stack.Screen
+          name="diagnostics"
+          options={{
+            headerShown: true,
+            headerStyle: { backgroundColor: "#09090b" },
+            headerTintColor: "#fff",
+            title: "Diagnostics",
+            presentation: "modal",
+          }}
+        />
       </Stack>
     </>
   );
