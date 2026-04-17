@@ -2,6 +2,7 @@
   "name": "flex-sales-coach",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.28.0",
   "scripts": {
     "dev": "pnpm --filter @flex/web dev",
     "build": "pnpm --filter @flex/web build",
@@ -9,6 +10,7 @@
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "turbo": "^2.9.6",
     "typescript": "^5"
   },
   "pnpm": {
