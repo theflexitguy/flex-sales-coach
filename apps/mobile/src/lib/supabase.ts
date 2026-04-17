@@ -42,4 +42,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     detectSessionInUrl: false,
   },
+  global: {
+    // Explicitly pass React Native's native fetch. In production bundles
+    // (Hermes + minified JS), supabase-js's fetch auto-detection can
+    // pick up a broken polyfill that works in dev (via Metro) but not prod.
+    fetch: (input, init) => fetch(input as RequestInfo, init),
+  },
 });

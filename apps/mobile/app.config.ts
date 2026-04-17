@@ -29,7 +29,7 @@ const config: ExpoConfig = {
         "Flex Sales Coach uses your location to tag where each sales conversation happens.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "13",
+    buildNumber: "14",
   },
   android: {
     adaptiveIcon: {
