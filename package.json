@@ -10,5 +10,19 @@
   },
   "devDependencies": {
     "typescript": "^5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@ffmpeg-installer/ffmpeg",
+      "@ffmpeg-installer/linux-x64",
+      "@ffmpeg-installer/darwin-arm64",
+      "@ffmpeg-installer/darwin-x64",
+      "@ffprobe-installer/ffprobe",
+      "@ffprobe-installer/linux-x64",
+      "@ffprobe-installer/darwin-arm64",
+      "@ffprobe-installer/darwin-x64",
+      "sharp",
+      "unrs-resolver"
+    ]
   }
 }
