@@ -20,12 +20,259 @@ function shq(s: string): string {
   return `"${s.replace(/"/g, '\\"')}"`;
 }
 
-const SILENCE_THRESHOLD_DB = -25; // -25dB accounts for ambient outdoor/bag noise
-const SILENCE_DURATION_S = 12;   // 12 seconds of silence = conversation boundary
-const MIN_CONVERSATION_S = 5;    // ignore segments shorter than 5 seconds
-const EDGE_SILENCE_TRIM_S = 1;   // trim 1s of silence from edges
+// Splitter tuning. Outdoor door-to-door environments have constant ambient
+// noise (wind, traffic), so we can't rely on absolute-silence detection.
+// Instead we use Deepgram's voice-activity output and confirm each candidate
+// split with a corroborating signal: GPS movement or a speaker change.
+const SPEECH_GAP_S = 20;                  // min silence between words to consider a split
+const INTER_HOUSE_DISTANCE_M = 40;        // movement that likely means "next house"
+const BACKYARD_MAX_M = 30;                // typical limit of staying on one property
+const FORCED_SPLIT_DISTANCE_M = 50;       // movement alone triggers a split if no speech gap
+const FORCED_SPLIT_WINDOW_S = 90;         // within this time window
+const MIN_CONVERSATION_S = 5;             // ignore slivers
+const EDGE_SILENCE_TRIM_S = 1;            // trim 1s off each segment's edges
+const SPEAKER_CONTEXT_S = 30;             // window we sample speakers in for pre/post comparison
+
+// Fallback if Deepgram returns essentially no words for the session (e.g. the
+// audio is corrupt or all wind). In that case we fall back to the old
+// silence-detection splitter rather than producing one giant conversation.
+const FALLBACK_SILENCE_THRESHOLD_DB = -15;
+const FALLBACK_SILENCE_DURATION_S = 15;
 
 export const maxDuration = 300; // 5 min timeout for Vercel Pro
+
+interface DgWord {
+  word: string;
+  start: number;
+  end: number;
+  confidence: number;
+  speaker?: number;
+  punctuated_word?: string;
+}
+
+interface DgUtterance {
+  speaker: number;
+  start: number;
+  end: number;
+  transcript: string;
+  confidence: number;
+  words?: DgWord[];
+}
+
+interface LocationPoint {
+  elapsed_s: number;
+  latitude: number;
+  longitude: number;
+}
+
+interface SegmentBoundary {
+  start: number;
+  end: number;
+}
+
+function distanceMeters(a: LocationPoint, b: LocationPoint): number {
+  const R = 6371e3;
+  const phi1 = (a.latitude * Math.PI) / 180;
+  const phi2 = (b.latitude * Math.PI) / 180;
+  const dPhi = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLambda = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const x =
+    Math.sin(dPhi / 2) ** 2 +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+/**
+ * Max pairwise distance between any two location points inside [t1, t2].
+ * If no points fall in the window, brackets the window with the nearest
+ * before/after points to estimate movement across the gap.
+ */
+function maxMovementInWindow(points: LocationPoint[], t1: number, t2: number): number {
+  const inWindow = points.filter((p) => p.elapsed_s >= t1 && p.elapsed_s <= t2);
+  if (inWindow.length >= 2) {
+    let max = 0;
+    for (let i = 0; i < inWindow.length; i++) {
+      for (let j = i + 1; j < inWindow.length; j++) {
+        max = Math.max(max, distanceMeters(inWindow[i], inWindow[j]));
+      }
+    }
+    return max;
+  }
+  const before = points.filter((p) => p.elapsed_s <= t1).slice(-1)[0];
+  const after = points.filter((p) => p.elapsed_s >= t2)[0];
+  if (before && after) return distanceMeters(before, after);
+  if (inWindow.length === 1 && (before || after)) {
+    const other = before ?? after;
+    return distanceMeters(inWindow[0], other);
+  }
+  return 0;
+}
+
+function speakersInWindow(words: DgWord[], t1: number, t2: number): Set<number> {
+  const out = new Set<number>();
+  for (const w of words) {
+    if (w.speaker == null) continue;
+    if (w.end >= t1 && w.start <= t2) out.add(w.speaker);
+  }
+  return out;
+}
+
+function scoreAsRep(utts: DgUtterance[]): number {
+  const text = utts.map((u) => u.transcript).join(" ").toLowerCase();
+  const totalWords = text.split(/\s+/).filter(Boolean).length;
+  let score = 0;
+  if (/\b(my name is|i'?m (?:with|from)|this is) /i.test(text)) score += 5;
+  if (/\b(pest control|mosquito|spray|service|protect|treatment|lawn|termite)\b/i.test(text)) score += 3;
+  if (/\b(special|discount|promotion|offer|free estimate|quote)\b/i.test(text)) score += 2;
+  if (/\b(quick question|minute of your time|real quick|got a second)\b/i.test(text)) score += 2;
+  if (/\b(hey there|hi there|how'?s it going|good (?:morning|afternoon|evening))\b/i.test(text)) score += 1;
+  score += Math.min(totalWords / 50, 5);
+  return score;
+}
+
+function identifyRepSpeaker(utterances: DgUtterance[]): number {
+  const bySpeaker = new Map<number, DgUtterance[]>();
+  for (const u of utterances) {
+    if (!bySpeaker.has(u.speaker)) bySpeaker.set(u.speaker, []);
+    bySpeaker.get(u.speaker)!.push(u);
+  }
+  let repSpeaker = 0;
+  if (bySpeaker.size >= 2) {
+    let best = -Infinity;
+    for (const [spk, utts] of bySpeaker) {
+      const s = scoreAsRep(utts);
+      if (s > best) {
+        best = s;
+        repSpeaker = spk;
+      }
+    }
+  }
+  return repSpeaker;
+}
+
+/**
+ * Compute candidate split points using the hybrid rule:
+ *   Split on a speech gap ≥ SPEECH_GAP_S **only if** corroborated by either
+ *   (a) GPS movement ≥ INTER_HOUSE_DISTANCE_M during the gap, or
+ *   (b) a customer speaker change across the gap.
+ *   Also injects a forced split if the rep walked ≥ FORCED_SPLIT_DISTANCE_M
+ *   inside a FORCED_SPLIT_WINDOW_S span with no corresponding speech gap
+ *   (the "kept talking while walking to next house" case).
+ */
+function computeSplitPoints(
+  words: DgWord[],
+  points: LocationPoint[],
+  repSpeaker: number,
+  totalDuration: number
+): number[] {
+  const splits: number[] = [];
+
+  // (1) Speech-gap candidates confirmed by GPS or new customer voice
+  for (let i = 0; i < words.length - 1; i++) {
+    const curr = words[i];
+    const next = words[i + 1];
+    const gap = next.start - curr.end;
+    if (gap < SPEECH_GAP_S) continue;
+
+    const movement = maxMovementInWindow(points, curr.end, next.start);
+
+    const preSpeakers = speakersInWindow(
+      words,
+      Math.max(0, curr.end - SPEAKER_CONTEXT_S),
+      curr.end
+    );
+    const postSpeakers = speakersInWindow(
+      words,
+      next.start,
+      next.start + SPEAKER_CONTEXT_S
+    );
+    // We only care about customer-speaker changes. The rep is constant.
+    const preCustomers = new Set([...preSpeakers].filter((s) => s !== repSpeaker));
+    const postCustomers = new Set([...postSpeakers].filter((s) => s !== repSpeaker));
+    const newCustomerVoice =
+      postCustomers.size > 0 &&
+      [...postCustomers].some((s) => !preCustomers.has(s));
+
+    if (movement >= INTER_HOUSE_DISTANCE_M || newCustomerVoice) {
+      splits.push((curr.end + next.start) / 2);
+    }
+  }
+
+  // (2) Forced splits: any span where rep walked ≥ FORCED_SPLIT_DISTANCE_M
+  //     inside FORCED_SPLIT_WINDOW_S, and no split already sits inside that
+  //     span. Split at the midpoint of the walking span.
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const span = points[j].elapsed_s - points[i].elapsed_s;
+      if (span > FORCED_SPLIT_WINDOW_S) break;
+      const d = distanceMeters(points[i], points[j]);
+      if (d < FORCED_SPLIT_DISTANCE_M) continue;
+      const mid = (points[i].elapsed_s + points[j].elapsed_s) / 2;
+      const alreadyCovered = splits.some(
+        (s) => Math.abs(s - mid) < FORCED_SPLIT_WINDOW_S / 2
+      );
+      if (!alreadyCovered) splits.push(mid);
+    }
+  }
+
+  // Dedup + sort + bound to session duration
+  const sorted = [...new Set(splits.map((s) => Math.round(s * 100) / 100))]
+    .sort((a, b) => a - b)
+    .filter((s) => s > 0 && s < totalDuration);
+
+  return sorted;
+}
+
+function buildSegmentBoundaries(
+  splitPoints: number[],
+  totalDuration: number
+): SegmentBoundary[] {
+  const boundaries: SegmentBoundary[] = [];
+  let segStart = 0;
+  for (const sp of splitPoints) {
+    if (sp - segStart >= MIN_CONVERSATION_S) {
+      boundaries.push({ start: segStart, end: sp });
+    }
+    segStart = sp;
+  }
+  if (totalDuration - segStart >= MIN_CONVERSATION_S) {
+    boundaries.push({ start: segStart, end: totalDuration });
+  }
+  if (boundaries.length === 0) {
+    boundaries.push({ start: 0, end: totalDuration });
+  }
+  return boundaries;
+}
+
+/**
+ * Fallback splitter used when Deepgram returns essentially no words
+ * (audio unusable). Runs a loose ffmpeg silencedetect on the concat.
+ */
+function fallbackSilenceSplit(concatPath: string, totalDuration: number): number[] {
+  let silenceOutput = "";
+  try {
+    const out = execSync(
+      `${shq(FFMPEG)} -i ${shq(concatPath)} -af silencedetect=noise=${FALLBACK_SILENCE_THRESHOLD_DB}dB:d=${FALLBACK_SILENCE_DURATION_S} -f null -`,
+      { timeout: 240000, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    silenceOutput = out.toString();
+  } catch (e) {
+    silenceOutput = (e as { stderr?: Buffer }).stderr?.toString() ?? "";
+  }
+  const silenceStarts: number[] = [];
+  const silenceEnds: number[] = [];
+  for (const line of silenceOutput.split("\n")) {
+    const s = line.match(/silence_start:\s*([\d.]+)/);
+    const e = line.match(/silence_end:\s*([\d.]+)/);
+    if (s) silenceStarts.push(parseFloat(s[1]));
+    if (e) silenceEnds.push(parseFloat(e[1]));
+  }
+  const points: number[] = [];
+  for (let i = 0; i < Math.min(silenceStarts.length, silenceEnds.length); i++) {
+    points.push((silenceStarts[i] + silenceEnds[i]) / 2);
+  }
+  return points.filter((p) => p > 0 && p < totalDuration);
+}
 
 export async function POST(request: Request) {
   if (!isInternalCall(request)) {
@@ -41,7 +288,7 @@ export async function POST(request: Request) {
   const admin = createAdmin();
 
   try {
-    // Get session
+    // --- 1. Load session, chunks, location points ---
     const { data: session } = await admin
       .from("recording_sessions")
       .select("*")
@@ -52,7 +299,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    // Get chunks in order
     const { data: chunks } = await admin
       .from("session_chunks")
       .select("*")
@@ -63,19 +309,23 @@ export async function POST(request: Request) {
       throw new Error("No chunks found for session");
     }
 
-    // Get fine-grained location points (one every ~30s during recording)
     const { data: locationPoints } = await admin
       .from("session_location_points")
       .select("elapsed_s, latitude, longitude")
       .eq("session_id", sessionId)
       .order("elapsed_s");
 
-    // Create temp working directory
+    const points: LocationPoint[] = (locationPoints ?? []).map((p) => ({
+      elapsed_s: Number(p.elapsed_s),
+      latitude: Number(p.latitude),
+      longitude: Number(p.longitude),
+    }));
+
     const workDir = join(tmpdir(), `flex-split-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
 
     try {
-      // Download all chunks in parallel (much faster for long sessions)
+      // --- 2. Download + normalize chunks ---
       const downloads = await Promise.all(
         chunks.map(async (chunk: { chunk_index: number; storage_path: string }) => {
           const { data: fileData, error: dlError } = await admin.storage
@@ -85,8 +335,7 @@ export async function POST(request: Request) {
             throw new Error(`Failed to download chunk ${chunk.chunk_index}: ${dlError?.message}`);
           }
           const chunkPath = join(workDir, `chunk_${chunk.chunk_index}.m4a`);
-          const buffer = Buffer.from(await fileData.arrayBuffer());
-          writeFileSync(chunkPath, buffer);
+          writeFileSync(chunkPath, Buffer.from(await fileData.arrayBuffer()));
           return { index: chunk.chunk_index, path: chunkPath };
         })
       );
@@ -94,10 +343,8 @@ export async function POST(request: Request) {
         .sort((a, b) => a.index - b.index)
         .map((d) => d.path);
 
-      // Normalize each chunk to a common WAV format first.
       // iOS expo-audio sometimes outputs 'ipcm' (interleaved PCM in MP4) which
       // FFmpeg's auto-probe doesn't recognize without bigger probe windows.
-      // -analyzeduration/probesize force it to read enough bytes to identify.
       const normalizedPaths: string[] = [];
       for (const chunkPath of chunkPaths) {
         const normalizedPath = chunkPath.replace(/\.m4a$/, ".wav");
@@ -109,9 +356,6 @@ export async function POST(request: Request) {
           normalizedPaths.push(normalizedPath);
         } catch (err) {
           const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
-          // Fallback: try again with explicit raw PCM input spec.
-          // If the MP4 container's codec tag is 'ipcm' (Apple interleaved PCM),
-          // old FFmpeg builds need to be told it's raw signed 16-bit little-endian PCM.
           try {
             execSync(
               `${shq(FFMPEG)} -f s16le -ar 44100 -ac 1 -i ${shq(chunkPath)} -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
@@ -125,14 +369,10 @@ export async function POST(request: Request) {
         }
       }
 
-      // Create concat file list for normalized WAV chunks
+      // --- 3. Concatenate into full session audio ---
       const concatListPath = join(workDir, "concat.txt");
-      const concatContent = normalizedPaths
-        .map((p) => `file '${p}'`)
-        .join("\n");
-      writeFileSync(concatListPath, concatContent);
+      writeFileSync(concatListPath, normalizedPaths.map((p) => `file '${p}'`).join("\n"));
 
-      // Concatenate WAVs (all now identical params) then encode to final M4A
       const concatPath = join(workDir, "full_recording.m4a");
       try {
         execSync(
@@ -144,70 +384,73 @@ export async function POST(request: Request) {
         throw new Error(`ffmpeg concat failed: ${stderr.slice(-500)}`);
       }
 
-      // Detect silences — FFmpeg always writes analysis to stderr
-      let silenceOutput = "";
-      try {
-        const out = execSync(
-          `${shq(FFMPEG)} -i ${shq(concatPath)} -af silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${SILENCE_DURATION_S} -f null -`,
-          { timeout: 240000, stdio: ["ignore", "pipe", "pipe"] }
-        );
-        silenceOutput = out.toString();
-      } catch (e: unknown) {
-        silenceOutput = (e as { stderr?: Buffer }).stderr?.toString() ?? "";
-      }
-
-      // Parse silence boundaries
-      const silenceEnds: number[] = [];
-      const silenceStarts: number[] = [];
-      const lines = silenceOutput.split("\n");
-      for (const line of lines) {
-        const startMatch = line.match(/silence_start:\s*([\d.]+)/);
-        const endMatch = line.match(/silence_end:\s*([\d.]+)/);
-        if (startMatch) silenceStarts.push(parseFloat(startMatch[1]));
-        if (endMatch) silenceEnds.push(parseFloat(endMatch[1]));
-      }
-
-      // Get total duration
       const durationOutput = execSync(
         `${shq(FFPROBE)} -v error -show_entries format=duration -of csv=p=0 ${shq(concatPath)}`,
         { encoding: "utf-8", timeout: 30000 }
       ).trim();
       const totalDuration = parseFloat(durationOutput) || 0;
 
-      // Build split points (midpoint of each silence region)
-      const splitPoints: number[] = [];
-      for (let i = 0; i < Math.min(silenceStarts.length, silenceEnds.length); i++) {
-        const midpoint = (silenceStarts[i] + silenceEnds[i]) / 2;
-        splitPoints.push(midpoint);
+      // --- 4. Transcribe the full session with Deepgram ---
+      const deepgramKey = process.env.DEEPGRAM_API_KEY;
+      if (!deepgramKey) {
+        throw new Error("DEEPGRAM_API_KEY not configured");
       }
-
-      // Create segments from split points
-      const segmentBoundaries: Array<{ start: number; end: number }> = [];
-      let segStart = 0;
-      for (const sp of splitPoints) {
-        if (sp - segStart >= MIN_CONVERSATION_S) {
-          segmentBoundaries.push({ start: segStart, end: sp });
+      const audioBuffer = readFileSync(concatPath);
+      const dgResponse = await fetch(
+        "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&utterances=true&smart_format=true",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Token ${deepgramKey}`,
+            "Content-Type": "audio/mp4",
+          },
+          body: audioBuffer,
         }
-        segStart = sp;
+      );
+      if (!dgResponse.ok) {
+        const text = await dgResponse.text().catch(() => "");
+        throw new Error(`Deepgram error ${dgResponse.status}: ${text.slice(0, 400)}`);
       }
-      // Last segment
-      if (totalDuration - segStart >= MIN_CONVERSATION_S) {
-        segmentBoundaries.push({ start: segStart, end: totalDuration });
+      const dgResult = await dgResponse.json();
+      const requestId = dgResult.metadata?.request_id ?? null;
+      const utterances: DgUtterance[] = dgResult.results?.utterances ?? [];
+
+      // Flatten words with speaker labels preserved. Fall back to the
+      // channels[0] alternatives word list if utterances were empty.
+      const allWords: DgWord[] = [];
+      for (const u of utterances) {
+        if (!u.words) continue;
+        for (const w of u.words) {
+          allWords.push({ ...w, speaker: w.speaker ?? u.speaker });
+        }
+      }
+      if (allWords.length === 0) {
+        const chWords = (dgResult.results?.channels?.[0]?.alternatives?.[0]?.words ?? []) as DgWord[];
+        allWords.push(...chWords);
+      }
+      allWords.sort((a, b) => a.start - b.start);
+
+      // --- 5. Identify rep speaker (stable across the whole session) ---
+      const repSpeaker = identifyRepSpeaker(utterances);
+
+      // --- 6. Compute split boundaries ---
+      let splitPoints = computeSplitPoints(allWords, points, repSpeaker, totalDuration);
+
+      // Last-resort: Deepgram produced no usable words AND we have no splits
+      // AND the session is long enough that one segment would be suspicious.
+      if (allWords.length === 0 && splitPoints.length === 0 && totalDuration > SPEECH_GAP_S * 2) {
+        splitPoints = fallbackSilenceSplit(concatPath, totalDuration);
       }
 
-      // If no silences found, treat entire recording as one conversation
-      if (segmentBoundaries.length === 0) {
-        segmentBoundaries.push({ start: 0, end: totalDuration });
-      }
+      const segmentBoundaries = buildSegmentBoundaries(splitPoints, totalDuration);
 
-      // Split and trim each segment
+      // --- 7. Cut, upload, and create per-segment records ---
       const segmentPaths: Array<{ path: string; start: number; end: number; duration: number }> = [];
       for (let i = 0; i < segmentBoundaries.length; i++) {
         const seg = segmentBoundaries[i];
         const trimmedStart = Math.min(seg.start + EDGE_SILENCE_TRIM_S, seg.end);
         const trimmedEnd = Math.max(seg.end - EDGE_SILENCE_TRIM_S, trimmedStart);
         const duration = trimmedEnd - trimmedStart;
-
         if (duration < MIN_CONVERSATION_S) continue;
 
         const segPath = join(workDir, `segment_${i}.m4a`);
@@ -215,51 +458,44 @@ export async function POST(request: Request) {
           `${shq(FFMPEG)} -i ${shq(concatPath)} -ss ${trimmedStart} -to ${trimmedEnd} -c copy ${shq(segPath)} -y`,
           { timeout: 30000 }
         );
-
-        segmentPaths.push({
-          path: segPath,
-          start: trimmedStart,
-          end: trimmedEnd,
-          duration,
-        });
+        segmentPaths.push({ path: segPath, start: trimmedStart, end: trimmedEnd, duration });
       }
 
-      // Upload each segment as a call
       const origin = new URL(request.url).origin;
+      const internalSecret = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
+      const internalHeaders = {
+        "Content-Type": "application/json",
+        "x-internal-secret": internalSecret,
+      };
+
       const conversationCount = segmentPaths.length;
 
       for (let i = 0; i < segmentPaths.length; i++) {
         const seg = segmentPaths[i];
         const isLast = i === segmentPaths.length - 1;
-        // Last conversation gets the rep's label; others get placeholder until AI names them
+
         const placeholderName = isLast
           ? session.label
           : `Conversation ${i + 1}`;
 
-        // Upload to call-recordings
+        // Upload segment audio
         const timestamp = Date.now();
         const storagePath = `${session.rep_id}/${timestamp}_session_${i}.m4a`;
-        const fileBuffer = readFileSync(seg.path);
-
         await admin.storage
           .from("call-recordings")
-          .upload(storagePath, fileBuffer, {
+          .upload(storagePath, readFileSync(seg.path), {
             contentType: "audio/mp4",
             upsert: false,
           });
 
-        // Geotag this segment:
-        // 1. Prefer fine-grained location points (sampled every ~30s during recording)
-        // 2. Fall back to the closest chunk's location
-        // 3. Fall back to the session's initial location
+        // Geotag: prefer fine-grained location points, fall back to chunk / session
         const segMidpoint = (seg.start + seg.end) / 2;
         let segLatitude: number | null = null;
         let segLongitude: number | null = null;
-
-        if (locationPoints && locationPoints.length > 0) {
-          const closest = locationPoints.reduce((best, p) =>
+        if (points.length > 0) {
+          const closest = points.reduce((best, p) =>
             Math.abs(p.elapsed_s - segMidpoint) < Math.abs(best.elapsed_s - segMidpoint) ? p : best
-          , locationPoints[0]);
+          , points[0]);
           segLatitude = closest.latitude;
           segLongitude = closest.longitude;
         } else {
@@ -274,7 +510,6 @@ export async function POST(request: Request) {
           segLongitude = closestChunk?.longitude ?? session.longitude ?? null;
         }
 
-        // Create call record
         const { data: call } = await admin
           .from("calls")
           .insert({
@@ -282,7 +517,7 @@ export async function POST(request: Request) {
             team_id: session.team_id,
             audio_storage_path: storagePath,
             duration_seconds: Math.round(seg.duration),
-            status: "uploaded",
+            status: "transcribed",
             customer_name: placeholderName,
             recorded_at: session.started_at,
             session_id: sessionId,
@@ -295,60 +530,58 @@ export async function POST(request: Request) {
 
         if (!call) continue;
 
-        // Trigger transcribe → analyze pipeline
-        const internalHeaders = {
-          "Content-Type": "application/json",
-          "x-internal-secret": process.env.INTERNAL_API_SECRET || "flex-internal-2024",
-        };
+        // --- 8. Slice transcript into segment-relative utterances ---
+        const segUtterances = utterances
+          .filter((u) => u.end >= seg.start && u.start <= seg.end)
+          .map((u) => ({
+            speaker: u.speaker === repSpeaker ? ("rep" as const) : ("customer" as const),
+            startMs: Math.max(0, Math.round((u.start - seg.start) * 1000)),
+            endMs: Math.max(0, Math.round((Math.min(u.end, seg.end) - seg.start) * 1000)),
+            text: u.transcript,
+            confidence: u.confidence,
+          }));
+
+        const fullText = segUtterances
+          .map((u) => `[${u.speaker}] ${u.text}`)
+          .join("\n");
+
+        await admin.from("transcripts").insert({
+          call_id: call.id,
+          full_text: fullText,
+          utterances: segUtterances,
+          deepgram_request_id: requestId,
+        });
+
+        // AI-name non-labeled conversations
+        if (!isLast && fullText.trim().length > 0) {
+          try {
+            const { text: aiName } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              prompt: `Based on this door-to-door sales conversation transcript, generate a short name (max 40 chars). Use the customer's name if mentioned, otherwise a brief description like "Price Objection - Interested" or "Not Home - Left Info". Return ONLY the name, nothing else.\n\n${fullText.slice(0, 2000)}`,
+              maxOutputTokens: 50,
+            });
+            const cleanName = aiName.trim().replace(/^["']|["']$/g, "");
+            if (cleanName.length > 0 && cleanName.length <= 100) {
+              await admin.from("calls").update({ customer_name: cleanName }).eq("id", call.id);
+            }
+          } catch {
+            // Keep placeholder name if AI naming fails
+          }
+        }
+
+        // Fire analyze (transcribe is skipped — we already have the transcript)
         try {
-          const transcribeRes = await fetch(`${origin}/api/process/transcribe`, {
+          await fetch(`${origin}/api/process/analyze`, {
             method: "POST",
             headers: internalHeaders,
             body: JSON.stringify({ callId: call.id }),
           });
-
-          if (transcribeRes.ok) {
-            // AI-name non-labeled conversations from their transcript
-            if (!isLast) {
-              try {
-                const { data: transcript } = await admin
-                  .from("transcripts")
-                  .select("full_text")
-                  .eq("call_id", call.id)
-                  .single();
-
-                if (transcript?.full_text) {
-                  const { text: aiName } = await generateText({
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    prompt: `Based on this door-to-door sales conversation transcript, generate a short name (max 40 chars). Use the customer's name if mentioned, otherwise a brief description like "Price Objection - Interested" or "Not Home - Left Info". Return ONLY the name, nothing else.\n\n${transcript.full_text.slice(0, 2000)}`,
-                    maxOutputTokens: 50,
-                  });
-
-                  const cleanName = aiName.trim().replace(/^["']|["']$/g, "");
-                  if (cleanName.length > 0 && cleanName.length <= 100) {
-                    await admin
-                      .from("calls")
-                      .update({ customer_name: cleanName })
-                      .eq("id", call.id);
-                  }
-                }
-              } catch {
-                // Keep placeholder name if AI naming fails
-              }
-            }
-
-            await fetch(`${origin}/api/process/analyze`, {
-              method: "POST",
-              headers: internalHeaders,
-              body: JSON.stringify({ callId: call.id }),
-            });
-          }
         } catch {
-          // Processing errors captured in call record
+          // Analyze errors surface via call.status
         }
       }
 
-      // Update session as completed
+      // --- 9. Finalize session ---
       await admin
         .from("recording_sessions")
         .update({
@@ -367,9 +600,11 @@ export async function POST(request: Request) {
         success: true,
         sessionId,
         conversationsFound: conversationCount,
+        totalDurationS: Math.round(totalDuration),
+        wordCount: allWords.length,
+        repSpeaker,
       });
     } finally {
-      // Clean up temp directory
       try {
         rmSync(workDir, { recursive: true, force: true });
       } catch {
