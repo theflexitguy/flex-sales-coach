@@ -14,6 +14,12 @@ import { getCurrentLocation } from "../location";
  * by the interrupting process).
  */
 const WATCHDOG_INTERVAL_MS = 2000;
+// Don't rotate for a few seconds after a fresh start — native getStatus()
+// can briefly report isRecording=false while the recorder warms up.
+const STARTUP_GRACE_MS = 5000;
+// Require two consecutive "not recording" readings before rotating, to
+// filter out one-off flaky status reads.
+const CONSECUTIVE_MISSES_TO_RECOVER = 2;
 
 const AUDIO_MODE = {
   allowsRecording: true,
@@ -30,6 +36,8 @@ export class ChunkManager {
   private appStateSub: { remove: () => void } | null = null;
   private onChunkComplete?: (index: number) => void;
   private isRotating = false;
+  private lastRecordingStartAt = 0;
+  private consecutiveMissedChecks = 0;
 
   setOnChunkComplete(callback: (index: number) => void) {
     this.onChunkComplete = callback;
@@ -38,8 +46,10 @@ export class ChunkManager {
   async startSession(sessionId: string): Promise<void> {
     this.sessionId = sessionId;
     this.chunkIndex = 0;
+    this.consecutiveMissedChecks = 0;
 
     await recordingEngine.startRecording();
+    this.lastRecordingStartAt = Date.now();
     locationTracker.start(sessionId);
 
     // Rotate chunks every CHUNK_DURATION_MS
@@ -47,14 +57,27 @@ export class ChunkManager {
       await this.rotateChunk();
     }, CHUNK_DURATION_MS);
 
-    // Watchdog: while a session is active, if the native recorder is not
-    // running, keep trying to recover. Previously this was gated on
-    // recordingEngine.getIsRecording() — once a recovery failed, that flag
-    // would be false and the watchdog would go dormant, silently killing
-    // the rest of the session.
+    // Watchdog: while a session is active, if the native recorder stays
+    // not-running, trigger recovery. Two guards prevent false rotation:
+    //   (1) a startup grace period after each fresh start — native
+    //       getStatus() can briefly return isRecording=false while warming;
+    //   (2) two consecutive missed checks are required before we act,
+    //       filtering out one-off flaky reads.
+    // Driven off sessionId rather than the engine flag so failed
+    // recoveries keep retrying every tick instead of going dormant.
     this.watchdog = setInterval(async () => {
       if (!this.sessionId || this.isRotating) return;
-      if (!recordingEngine.isActuallyRecording()) {
+      if (Date.now() - this.lastRecordingStartAt < STARTUP_GRACE_MS) {
+        this.consecutiveMissedChecks = 0;
+        return;
+      }
+      if (recordingEngine.isActuallyRecording()) {
+        this.consecutiveMissedChecks = 0;
+        return;
+      }
+      this.consecutiveMissedChecks += 1;
+      if (this.consecutiveMissedChecks >= CONSECUTIVE_MISSES_TO_RECOVER) {
+        this.consecutiveMissedChecks = 0;
         await this.recoverFromInterruption();
       }
     }, WATCHDOG_INTERVAL_MS);
@@ -93,6 +116,8 @@ export class ChunkManager {
       // subsequent startRecording() to fail.
       await setAudioModeAsync(AUDIO_MODE);
       await recordingEngine.startRecording();
+      this.lastRecordingStartAt = Date.now();
+      this.consecutiveMissedChecks = 0;
       uploadQueue.recordRecorderEvent(
         activeSessionId,
         this.chunkIndex,
@@ -155,6 +180,8 @@ export class ChunkManager {
       // recovery — defends against an undetected audio-session takeover.
       await setAudioModeAsync(AUDIO_MODE);
       await recordingEngine.startRecording();
+      this.lastRecordingStartAt = Date.now();
+      this.consecutiveMissedChecks = 0;
     } catch (error) {
       const msg = error instanceof Error ? error.message : "unknown error";
       console.error("Chunk rotation error:", error);
