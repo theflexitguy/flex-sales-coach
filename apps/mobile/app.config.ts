@@ -55,6 +55,20 @@ const config: ExpoConfig = {
           "Flex Sales Coach needs microphone access to record sales conversations for coaching.",
       },
     ],
+    [
+      "@config-plugins/react-native-webrtc",
+      {
+        cameraPermission:
+          "Flex Sales Coach does not need your camera.",
+        microphonePermission:
+          "Flex Sales Coach needs microphone access for AI roleplay conversations.",
+      },
+    ],
+    // Patches iOS AppDelegate + Android MainApplication to call
+    // LiveKitReactNative.setUp() before React Native init. Without this the
+    // @livekit/react-native native bridge isn't initialized and any import
+    // of @elevenlabs/react-native crashes the app at launch.
+    "@livekit/react-native-expo-plugin",
   ],
   extra: {
     router: {},
