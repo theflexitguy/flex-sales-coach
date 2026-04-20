@@ -8,3 +8,7 @@ dist
 *.tsbuildinfo
 .expo
 .vercel
+
+# iOS build artifacts (local only)
+apps/mobile/*.ipa
+apps/mobile/build-*.ipa
