@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { apiGet } from "../../../services/api";
+import { apiGet, apiPost } from "../../../services/api";
 import { useCachedFetch } from "../../../hooks/useCachedFetch";
 import { useAuthStore } from "../../../stores/auth-store";
 
@@ -67,6 +67,29 @@ export default function CallsListScreen() {
     `calls-list-${filter}`,
     () => apiGet<{ calls: CallItem[] }>(`/api/mobile/calls?limit=50&filter=${filter}`)
   );
+
+  // Self-heal: on mount, ask the server to re-run split on any of this
+  // rep's sessions stuck in 'processing' or with a dead heartbeat. No-op
+  // when nothing's stuck. If anything was recovered, refresh the list so
+  // the newly-created calls show up without the rep having to pull.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiPost<{ recovered: string[] }>(
+          "/api/sessions/ensure-split",
+          {}
+        );
+        if (!cancelled && res.recovered.length > 0) refresh();
+      } catch {
+        // best-effort — don't block the UI if the recovery sweep fails
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Apply client-side rep filter when in team view
   const allCalls = data?.calls ?? [];

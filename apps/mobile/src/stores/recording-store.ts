@@ -1,6 +1,6 @@
 import { Alert } from "react-native";
 import { create } from "zustand";
-import { chunkManager } from "../services/recording/ChunkManager";
+import { chunkManager, type RecordingHealth } from "../services/recording/ChunkManager";
 import { uploadQueue } from "../services/recording/UploadQueue";
 import { recordingEngine } from "../services/recording/RecordingEngine";
 import { apiGet, apiPost } from "../services/api";
@@ -23,6 +23,7 @@ interface RecordingState {
   uploadedChunks: number;
   totalChunks: number;
   meteringDb: number; // Current audio input level in dB (-160 silent, 0 max)
+  health: RecordingHealth;
   error: string | null;
 
   startDay: () => Promise<void>;
@@ -41,6 +42,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
   uploadedChunks: 0,
   totalChunks: 0,
   meteringDb: -160,
+  health: "stopped",
   error: null,
 
   startDay: async () => {
@@ -67,6 +69,12 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       // Set up chunk completion callback
       chunkManager.setOnChunkComplete((index) => {
         set({ chunkCount: index + 1 });
+      });
+
+      // Mirror recorder health into store so the Home screen can render
+      // an explicit "RECORDING / PAUSED / DEAD" indicator.
+      chunkManager.setOnHealthChange((health) => {
+        set({ health });
       });
 
       // Set up upload status callback

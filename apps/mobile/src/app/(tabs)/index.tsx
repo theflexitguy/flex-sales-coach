@@ -35,6 +35,7 @@ function RecordingView({ isManager }: { isManager: boolean }) {
     uploadedChunks,
     totalChunks,
     meteringDb,
+    health,
     error,
     startDay,
     stopAndName,
@@ -158,22 +159,46 @@ function RecordingView({ isManager }: { isManager: boolean }) {
           <Text style={styles.timer}>{displayTime}</Text>
 
           {isRecording && !showStopModal && (
-            <View style={styles.meterRow}>
-              <View style={styles.meterBar}>
+            <>
+              <View
+                style={[
+                  styles.healthBadge,
+                  health === "recording" && styles.healthBadgeOk,
+                  health === "paused" && styles.healthBadgeWarn,
+                  health === "stopped" && styles.healthBadgeError,
+                ]}
+              >
                 <View
                   style={[
-                    styles.meterFill,
-                    {
-                      width: `${Math.max(0, Math.min(100, Math.round(((meteringDb + 60) / 60) * 100)))}%` as `${number}%`,
-                      backgroundColor: meteringDb > -6 ? "#ef4444" : meteringDb > -24 ? "#22c55e" : "#71717a",
-                    },
+                    styles.healthDot,
+                    health === "recording" && { backgroundColor: "#22c55e" },
+                    health === "paused" && { backgroundColor: "#f59e0b" },
+                    health === "stopped" && { backgroundColor: "#ef4444" },
                   ]}
                 />
+                <Text style={styles.healthText}>
+                  {health === "recording" && "RECORDING — safe to switch apps"}
+                  {health === "paused" && "PAUSED — resuming…"}
+                  {health === "stopped" && "RECORDER STOPPED — tap below"}
+                </Text>
               </View>
-              <Text style={styles.meterLabel}>
-                {meteringDb <= -60 ? "No audio" : meteringDb > -6 ? "Too loud" : "Picking up audio"}
-              </Text>
-            </View>
+              <View style={styles.meterRow}>
+                <View style={styles.meterBar}>
+                  <View
+                    style={[
+                      styles.meterFill,
+                      {
+                        width: `${Math.max(0, Math.min(100, Math.round(((meteringDb + 60) / 60) * 100)))}%` as `${number}%`,
+                        backgroundColor: meteringDb > -6 ? "#ef4444" : meteringDb > -24 ? "#22c55e" : "#71717a",
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.meterLabel}>
+                  {meteringDb <= -60 ? "No audio" : meteringDb > -6 ? "Too loud" : "Picking up audio"}
+                </Text>
+              </View>
+            </>
           )}
 
           <View style={styles.statsRow}>
@@ -386,6 +411,39 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   progressFill: { height: "100%", backgroundColor: "#35b2ff", borderRadius: 2 },
+  healthBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginVertical: 8,
+  },
+  healthBadgeOk: {
+    backgroundColor: "rgba(34,197,94,0.08)",
+    borderColor: "rgba(34,197,94,0.3)",
+  },
+  healthBadgeWarn: {
+    backgroundColor: "rgba(245,158,11,0.1)",
+    borderColor: "rgba(245,158,11,0.4)",
+  },
+  healthBadgeError: {
+    backgroundColor: "rgba(239,68,68,0.1)",
+    borderColor: "rgba(239,68,68,0.4)",
+  },
+  healthDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  healthText: {
+    color: "#d4d4d8",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
   meterRow: {
     width: "80%",
     alignItems: "center",
