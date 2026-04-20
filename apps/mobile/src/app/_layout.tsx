@@ -3,7 +3,6 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AppState, View, ActivityIndicator } from "react-native";
 import type { AppStateStatus } from "react-native";
-import { ConversationProvider } from "@elevenlabs/react-native";
 import { useAuthStore } from "../stores/auth-store";
 import { uploadQueue } from "../services/recording/UploadQueue";
 import { useRecordingStore } from "../stores/recording-store";
@@ -64,7 +63,7 @@ export default function RootLayout() {
   }
 
   return (
-    <ConversationProvider>
+    <>
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#09090b" } }}>
         <Stack.Screen name="(tabs)" />
@@ -90,6 +89,6 @@ export default function RootLayout() {
           }}
         />
       </Stack>
-    </ConversationProvider>
+    </>
   );
 }

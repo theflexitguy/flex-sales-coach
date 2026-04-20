@@ -29,7 +29,7 @@ const config: ExpoConfig = {
         "Flex Sales Coach uses your location to tag where each sales conversation happens.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "21",
+    buildNumber: "20",
   },
   android: {
     adaptiveIcon: {
@@ -53,15 +53,6 @@ const config: ExpoConfig = {
       {
         microphonePermission:
           "Flex Sales Coach needs microphone access to record sales conversations for coaching.",
-      },
-    ],
-    [
-      "@config-plugins/react-native-webrtc",
-      {
-        cameraPermission:
-          "Flex Sales Coach does not need your camera.",
-        microphonePermission:
-          "Flex Sales Coach needs microphone access for AI roleplay conversations.",
       },
     ],
   ],
