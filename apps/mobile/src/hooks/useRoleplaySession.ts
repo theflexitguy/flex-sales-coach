@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useConversation } from "@elevenlabs/react-native";
 import { apiPost } from "../services/api";
-import { AudioStreamService } from "../services/roleplay/AudioStreamService";
-import type { StreamStatus } from "../services/roleplay/AudioStreamService";
 
 export type RoleplayPhase = "idle" | "connecting" | "active" | "ending" | "completed" | "error";
 
@@ -16,6 +15,24 @@ interface SessionResult {
   readonly hasTranscript: boolean;
 }
 
+interface StartSessionResponse {
+  readonly sessionId: string;
+  readonly agentId: string;
+  readonly signedUrl: string;
+  readonly personaName: string;
+  readonly overridePrompt: string;
+}
+
+/**
+ * Door-to-door roleplay session hook.
+ *
+ * Wires Flex session lifecycle (DB row creation, analysis, summary fetching)
+ * to the ElevenLabs Conversational AI SDK for real-time voice.
+ *
+ * The ElevenLabs SDK handles mic capture, WebRTC streaming, and audio
+ * playback natively via LiveKit; we just pass it the signed URL and scenario
+ * prompt override we got from our own /api/roleplay/sessions/start route.
+ */
 export function useRoleplaySession() {
   const [phase, setPhase] = useState<RoleplayPhase>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -26,81 +43,98 @@ export function useRoleplaySession() {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const streamRef = useRef<AudioStreamService | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
 
-  // Duration timer
+  const conversation = useConversation({
+    onConnect: () => {
+      setPhase("active");
+    },
+    onDisconnect: () => {
+      // Only bump to completed if we initiated the end. Unexpected disconnect
+      // during connecting/active is an error state; endSession() will take
+      // care of the happy path.
+      setAgentSpeaking(false);
+    },
+    onError: (message: string) => {
+      setErrorMessage(message);
+      setPhase("error");
+    },
+    onMessage: ({ source, message }: { source: "user" | "ai"; message: string }) => {
+      // ElevenLabs reports finalized turn messages via onMessage. "user" is
+      // the rep's speech; "ai" is the agent persona's response.
+      const role: TranscriptLine["role"] = source === "user" ? "rep" : "customer";
+      setTranscript((prev) => [...prev, { role, text: message }]);
+    },
+    onModeChange: ({ mode }: { mode: "speaking" | "listening" }) => {
+      setAgentSpeaking(mode === "speaking");
+    },
+  });
+
+  // Duration timer — runs while the conversation is active.
   useEffect(() => {
     if (phase === "active") {
       startTimeRef.current = Date.now();
       timerRef.current = setInterval(() => {
         setDuration(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }, 1000);
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [phase]);
 
-  const startSession = useCallback(async (scenarioId?: string, personaId?: string) => {
-    setPhase("connecting");
-    setTranscript([]);
-    setDuration(0);
-    setResult(null);
-    setErrorMessage(null);
+  const startSession = useCallback(
+    async (scenarioId?: string, personaId?: string) => {
+      setPhase("connecting");
+      setTranscript([]);
+      setDuration(0);
+      setResult(null);
+      setErrorMessage(null);
 
-    try {
-      const data = await apiPost<{
-        sessionId: string;
-        conversationId: string;
-        signedUrl: string;
-        personaName: string;
-      }>("/api/roleplay/sessions/start", {
-        scenarioId: scenarioId ?? undefined,
-        personaId: personaId ?? undefined,
-      });
+      try {
+        const data = await apiPost<StartSessionResponse>(
+          "/api/roleplay/sessions/start",
+          {
+            scenarioId: scenarioId ?? undefined,
+            personaId: personaId ?? undefined,
+          }
+        );
 
-      setSessionId(data.sessionId);
-      setPersonaName(data.personaName);
+        setSessionId(data.sessionId);
+        setPersonaName(data.personaName);
 
-      // Create audio stream
-      const stream = new AudioStreamService({
-        onStatusChange: (status: StreamStatus) => {
-          if (status === "connected") setPhase("active");
-          if (status === "error") setPhase("error");
-        },
-        onAgentSpeaking: setAgentSpeaking,
-        onTranscript: (role, text) => {
-          setTranscript((prev) => [...prev, { role, text }]);
-        },
-        onError: (err) => {
-          setErrorMessage(err);
-          setPhase("error");
-        },
-      });
-
-      streamRef.current = stream;
-      await stream.connect(data.signedUrl);
-    } catch (err: unknown) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to start session");
-      setPhase("error");
-    }
-  }, []);
+        // Hand the signed URL + scenario-specific prompt override to the SDK.
+        // The SDK opens its WebRTC connection and streams audio both ways.
+        await conversation.startSession({
+          signedUrl: data.signedUrl,
+          overrides: {
+            agent: {
+              prompt: {
+                prompt: data.overridePrompt,
+              },
+            },
+          },
+        });
+      } catch (err: unknown) {
+        setErrorMessage(err instanceof Error ? err.message : "Failed to start session");
+        setPhase("error");
+      }
+    },
+    [conversation]
+  );
 
   const endSession = useCallback(async () => {
     if (!sessionId) return;
     setPhase("ending");
 
-    // Disconnect audio
-    if (streamRef.current) {
-      await streamRef.current.disconnect();
-      streamRef.current = null;
+    try {
+      await conversation.endSession();
+    } catch {
+      // Already disconnected — carry on.
     }
 
     try {
@@ -113,7 +147,7 @@ export function useRoleplaySession() {
       setErrorMessage(err instanceof Error ? err.message : "Failed to end session");
       setPhase("error");
     }
-  }, [sessionId]);
+  }, [conversation, sessionId]);
 
   const reset = useCallback(() => {
     setPhase("idle");
@@ -126,13 +160,16 @@ export function useRoleplaySession() {
     setErrorMessage(null);
   }, []);
 
-  // Cleanup on unmount
+  // Defensive cleanup if the hook unmounts mid-conversation.
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.disconnect();
+      try {
+        conversation.endSession();
+      } catch {
+        // already disconnected
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {
