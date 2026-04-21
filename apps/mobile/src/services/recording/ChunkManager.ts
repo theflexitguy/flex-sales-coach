@@ -1,4 +1,9 @@
-import { AppState, AppStateStatus } from "react-native";
+import {
+  AppState,
+  AppStateStatus,
+  NativeEventEmitter,
+  NativeModules,
+} from "react-native";
 import { setAudioModeAsync } from "expo-audio";
 import { recordingEngine } from "./RecordingEngine";
 import { uploadQueue } from "./UploadQueue";
@@ -6,6 +11,25 @@ import { locationTracker } from "./LocationTracker";
 import { CHUNK_DURATION_MS, API_BASE_URL } from "../../constants/recording";
 import { getCurrentLocation } from "../location";
 import { supabase } from "../../lib/supabase";
+
+// Native bridge — observes AVAudioSession interruptions / route changes
+// at iOS level (see plugins/ios-recording-monitor/FlexRecordingMonitor.m).
+// We listen here so the chunk manager can respond to an interruption
+// end the moment JS gets CPU again, without waiting for the 2-s
+// watchdog tick that iOS may have throttled.
+interface FlexRecordingMonitorModule {
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
+}
+const FlexRecordingMonitor = (NativeModules as {
+  FlexRecordingMonitor?: FlexRecordingMonitorModule;
+}).FlexRecordingMonitor;
+// NativeEventEmitter accepts the ObjC bridge as a "module" argument —
+// it's loosely typed on the TS side, so cast here is safe.
+const flexMonitorEmitter =
+  FlexRecordingMonitor != null
+    ? new NativeEventEmitter(FlexRecordingMonitor as never)
+    : null;
 
 /**
  * Recording-health state exposed to the UI so reps can see at a glance
@@ -55,6 +79,7 @@ export class ChunkManager {
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private appStateSub: { remove: () => void } | null = null;
+  private nativeSubs: Array<{ remove: () => void }> = [];
   private onChunkComplete?: (index: number) => void;
   private onHealthChange?: (health: RecordingHealth) => void;
   private isRotating = false;
@@ -166,6 +191,73 @@ export class ChunkManager {
         }
       }
     });
+
+    // Subscribe to native AVAudioSession events. This is the critical
+    // background-resilience path — iOS delivers these notifications even
+    // while JS timers are throttled, and the native side has already
+    // re-activated the audio session by the time we get here, so the
+    // recorder can immediately resume.
+    if (flexMonitorEmitter) {
+      this.nativeSubs.push(
+        flexMonitorEmitter.addListener("interruptionBegan", () => {
+          if (!this.sessionId) return;
+          uploadQueue.recordRecorderEvent(
+            this.sessionId,
+            this.chunkIndex,
+            "native: interruption began (call/Siri/route change)"
+          );
+          this.setHealth("paused");
+        })
+      );
+      this.nativeSubs.push(
+        flexMonitorEmitter.addListener(
+          "interruptionEnded",
+          (evt: { shouldResume?: boolean; reactivated?: boolean }) => {
+            if (!this.sessionId) return;
+            uploadQueue.recordRecorderEvent(
+              this.sessionId,
+              this.chunkIndex,
+              `native: interruption ended (shouldResume=${evt?.shouldResume}, sessionReactivated=${evt?.reactivated}) — recovering`
+            );
+            // Fire recovery immediately on whatever CPU iOS grants.
+            // This races the 2-s watchdog tick by seconds, which matters
+            // because if we're backgrounded the watchdog might not fire
+            // for minutes.
+            this.recoverFromInterruption().catch(() => {});
+          }
+        )
+      );
+      this.nativeSubs.push(
+        flexMonitorEmitter.addListener(
+          "routeChanged",
+          (evt: { reason?: number }) => {
+            if (!this.sessionId) return;
+            // Any route change can silently drop the recorder —
+            // headphones unplugged, BT device switched, CarPlay
+            // connected. Treat as potential interruption and verify.
+            uploadQueue.recordRecorderEvent(
+              this.sessionId,
+              this.chunkIndex,
+              `native: route changed (reason=${evt?.reason ?? 0}) — verifying recorder`
+            );
+            if (!recordingEngine.isActuallyRecording()) {
+              this.recoverFromInterruption().catch(() => {});
+            }
+          }
+        )
+      );
+      this.nativeSubs.push(
+        flexMonitorEmitter.addListener("mediaServicesReset", () => {
+          if (!this.sessionId) return;
+          uploadQueue.recordRecorderEvent(
+            this.sessionId,
+            this.chunkIndex,
+            "native: media services reset — rebuilding recorder"
+          );
+          this.recoverFromInterruption().catch(() => {});
+        })
+      );
+    }
   }
 
   private async recoverFromInterruption(): Promise<void> {
@@ -281,6 +373,10 @@ export class ChunkManager {
     if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
     if (this.appStateSub) { this.appStateSub.remove(); this.appStateSub = null; }
+    for (const sub of this.nativeSubs) {
+      try { sub.remove(); } catch { /* ignore */ }
+    }
+    this.nativeSubs = [];
     this.setHealth("stopped");
     await locationTracker.stop();
 

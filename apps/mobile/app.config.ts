@@ -29,7 +29,7 @@ const config: ExpoConfig = {
         "Flex Sales Coach uses your location to tag where each sales conversation happens.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "21",
+    buildNumber: "22",
   },
   android: {
     adaptiveIcon: {
@@ -55,6 +55,11 @@ const config: ExpoConfig = {
           "Flex Sales Coach needs microphone access to record sales conversations for coaching.",
       },
     ],
+    // Native AVAudioSession interruption observer. Fires on phone calls,
+    // Siri, BT route changes, etc. and re-activates the session in
+    // native code — the JS watchdog can't do this while backgrounded
+    // because iOS throttles setInterval.
+    "./plugins/with-flex-recording-monitor",
   ],
   extra: {
     router: {},
