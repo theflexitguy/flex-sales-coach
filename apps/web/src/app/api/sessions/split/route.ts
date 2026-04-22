@@ -10,6 +10,12 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+import {
+  transcribeChunk,
+  type ChunkTranscript,
+  type ChunkWord,
+  type ChunkUtterance,
+} from "@/lib/chunk-transcribe";
 
 // Bundled FFmpeg binaries — required because Vercel Functions don't have
 // system ffmpeg installed.
@@ -40,16 +46,14 @@ const SPEAKER_CONTEXT_S = 30;             // window we sample speakers in for pr
 const FALLBACK_SILENCE_THRESHOLD_DB = -15;
 const FALLBACK_SILENCE_DURATION_S = 15;
 
-export const maxDuration = 300; // 5 min timeout for Vercel Pro
+// 800s is the Vercel Pro ceiling on Fluid Compute. A 4-hour session with
+// 240+ chunks + Deepgram transcription + segment extraction needs every
+// second of it. Phase 4 pushes transcription per-chunk so most of the
+// expensive work is already done by the time split runs, but keep the
+// big ceiling here as a safety net for legacy sessions.
+export const maxDuration = 800;
 
-interface DgWord {
-  word: string;
-  start: number;
-  end: number;
-  confidence: number;
-  speaker?: number;
-  punctuated_word?: string;
-}
+type DgWord = ChunkWord;
 
 interface DgUtterance {
   speaker: number;
@@ -58,6 +62,147 @@ interface DgUtterance {
   transcript: string;
   confidence: number;
   words?: DgWord[];
+}
+
+// Fill in missing transcripts for this session by invoking Deepgram per-chunk
+// in parallel with a small concurrency cap. Phase 4 path: by the time a
+// session is stopped, the chunk route has already transcribed almost all of
+// them; this just handles stragglers + old sessions migrated in flight.
+async function ensureAllChunksTranscribed(
+  sessionId: string,
+  chunks: Array<{ chunk_index: number; storage_path: string; transcript_json: ChunkTranscript | null }>
+): Promise<void> {
+  const pending = chunks.filter((c) => !c.transcript_json);
+  if (pending.length === 0) return;
+
+  const CONCURRENCY = 4;
+  for (let i = 0; i < pending.length; i += CONCURRENCY) {
+    const slice = pending.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      slice.map((c) => transcribeChunk(sessionId, c.chunk_index, c.storage_path))
+    );
+  }
+}
+
+/**
+ * Re-identify the rep speaker inside a single chunk. Speaker IDs from
+ * Deepgram aren't consistent across independent invocations, so we
+ * determine who the rep is per-chunk and then remap.
+ */
+function repSpeakerInChunk(utterances: ChunkUtterance[]): number {
+  const bySpeaker = new Map<number, ChunkUtterance[]>();
+  for (const u of utterances) {
+    if (!bySpeaker.has(u.speaker)) bySpeaker.set(u.speaker, []);
+    bySpeaker.get(u.speaker)!.push(u);
+  }
+  if (bySpeaker.size < 2) return 0;
+  let best = -Infinity;
+  let repSpeaker = 0;
+  for (const [spk, utts] of bySpeaker) {
+    const s = scoreAsRep(
+      utts.map((u) => ({
+        speaker: u.speaker,
+        start: u.start,
+        end: u.end,
+        transcript: u.transcript,
+        confidence: u.confidence,
+      }))
+    );
+    if (s > best) {
+      best = s;
+      repSpeaker = spk;
+    }
+  }
+  return repSpeaker;
+}
+
+interface StitchedResult {
+  words: DgWord[];
+  utterances: DgUtterance[];
+  /**
+   * Every non-rep speaker gets a globally-unique ID so the "new customer
+   * voice" split signal still discriminates within a chunk even though
+   * Deepgram speaker IDs aren't consistent across chunks.
+   */
+  repSpeaker: number;
+  sourceRequestIds: string[];
+}
+
+/**
+ * Stitch per-chunk transcripts into a single session-global transcript.
+ * Times are shifted by each chunk's cumulative audio offset. Speakers
+ * are remapped so:
+ *   - the rep gets ID 0 across the whole session
+ *   - non-rep (customer) speakers get fresh globally-unique IDs
+ *     per-chunk (we can't reconcile customer identity across chunks
+ *     without re-transcribing the full audio)
+ */
+function stitchTranscripts(
+  chunks: Array<{
+    chunk_index: number;
+    duration_seconds: number | null;
+    transcript_json: ChunkTranscript | null;
+  }>
+): StitchedResult {
+  const sorted = [...chunks].sort((a, b) => a.chunk_index - b.chunk_index);
+
+  const words: DgWord[] = [];
+  const utterances: DgUtterance[] = [];
+  const sourceRequestIds: string[] = [];
+
+  let offset = 0;
+  let nextCustomerId = 1; // 0 is reserved for the rep
+  const REP_SPEAKER = 0;
+
+  for (const chunk of sorted) {
+    const t = chunk.transcript_json;
+    const duration = chunk.duration_seconds ?? 0;
+
+    if (!t) {
+      offset += duration;
+      continue;
+    }
+    if (t.request_id) sourceRequestIds.push(t.request_id);
+
+    const localRep = repSpeakerInChunk(t.utterances);
+    // Customer speakers in this chunk → fresh global IDs
+    const customerRemap = new Map<number, number>();
+    const remap = (localSpeaker: number): number => {
+      if (localSpeaker === localRep) return REP_SPEAKER;
+      let gid = customerRemap.get(localSpeaker);
+      if (gid == null) {
+        gid = nextCustomerId++;
+        customerRemap.set(localSpeaker, gid);
+      }
+      return gid;
+    };
+
+    for (const w of t.words) {
+      words.push({
+        ...w,
+        start: w.start + offset,
+        end: w.end + offset,
+        speaker: w.speaker != null ? remap(w.speaker) : undefined,
+      });
+    }
+
+    for (const u of t.utterances) {
+      utterances.push({
+        speaker: remap(u.speaker),
+        start: u.start + offset,
+        end: u.end + offset,
+        transcript: u.transcript,
+        confidence: u.confidence,
+      });
+    }
+
+    offset += duration;
+  }
+
+  words.sort((a, b) => a.start - b.start);
+  utterances.sort((a, b) => a.start - b.start);
+
+  return { words, utterances, repSpeaker: REP_SPEAKER, sourceRequestIds };
 }
 
 interface LocationPoint {
@@ -326,9 +471,36 @@ export async function POST(request: Request) {
     mkdirSync(workDir, { recursive: true });
 
     try {
-      // --- 2. Download + normalize chunks ---
+      // --- 2. Ensure every chunk has a cached transcript ---
+      // The /api/sessions/chunk route runs Deepgram on each chunk as it
+      // uploads. Most of the work is already done — this only
+      // transcribes stragglers. Phase 4 skips sending the multi-hour
+      // concat to Deepgram inside this function's budget.
+      await ensureAllChunksTranscribed(
+        sessionId,
+        chunks as Array<{
+          chunk_index: number;
+          storage_path: string;
+          transcript_json: ChunkTranscript | null;
+        }>
+      );
+
+      // Re-fetch so we pick up the transcripts we just wrote.
+      const { data: chunksWithTranscripts } = await admin
+        .from("session_chunks")
+        .select("*")
+        .eq("session_id", sessionId)
+        .order("chunk_index");
+      const workChunks = (chunksWithTranscripts ?? chunks) as Array<{
+        chunk_index: number;
+        storage_path: string;
+        duration_seconds: number | null;
+        transcript_json: ChunkTranscript | null;
+      }>;
+
+      // --- 3. Download chunks in parallel, then concat for segment cutting ---
       const downloads = await Promise.all(
-        chunks.map(async (chunk: { chunk_index: number; storage_path: string }) => {
+        workChunks.map(async (chunk) => {
           const { data: fileData, error: dlError } = await admin.storage
             .from("recording-chunks")
             .download(chunk.storage_path);
@@ -344,45 +516,71 @@ export async function POST(request: Request) {
         .sort((a, b) => a.index - b.index)
         .map((d) => d.path);
 
-      // iOS expo-audio sometimes outputs 'ipcm' (interleaved PCM in MP4) which
-      // FFmpeg's auto-probe doesn't recognize without bigger probe windows.
-      const normalizedPaths: string[] = [];
-      for (const chunkPath of chunkPaths) {
-        const normalizedPath = chunkPath.replace(/\.m4a$/, ".wav");
-        try {
-          execSync(
-            `${shq(FFMPEG)} -analyzeduration 100M -probesize 100M -i ${shq(chunkPath)} -ac 1 -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
-            { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
-          );
-          normalizedPaths.push(normalizedPath);
-        } catch (err) {
-          const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
-          try {
-            execSync(
-              `${shq(FFMPEG)} -f s16le -ar 44100 -ac 1 -i ${shq(chunkPath)} -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
-              { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
-            );
-            normalizedPaths.push(normalizedPath);
-          } catch (err2) {
-            const stderr2 = (err2 as { stderr?: Buffer }).stderr?.toString() ?? "";
-            throw new Error(`ffmpeg normalize failed: ${stderr.slice(-250)} | fallback: ${stderr2.slice(-250)}`);
-          }
-        }
-      }
-
-      // --- 3. Concatenate into full session audio ---
       const concatListPath = join(workDir, "concat.txt");
-      writeFileSync(concatListPath, normalizedPaths.map((p) => `file '${p}'`).join("\n"));
-
       const concatPath = join(workDir, "full_recording.m4a");
+
+      // Fast path: chunks are already proper AAC/m4a (the recorder forces
+      // MPEG4AAC), so concat demuxer + -c copy skips decode/encode entirely.
+      // Falls back to normalize-then-reencode only if direct concat fails —
+      // e.g. legacy sessions with mixed-codec chunks from before the
+      // explicit AAC config was added.
+      writeFileSync(concatListPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
+      let concatOk = false;
       try {
         execSync(
-          `${shq(FFMPEG)} -f concat -safe 0 -i ${shq(concatListPath)} -c:a aac -b:a 64k ${shq(concatPath)} -y`,
-          { timeout: 240000, stdio: ["ignore", "ignore", "pipe"] }
+          `${shq(FFMPEG)} -f concat -safe 0 -i ${shq(concatListPath)} -c copy ${shq(concatPath)} -y`,
+          { timeout: 180000, stdio: ["ignore", "ignore", "pipe"] }
         );
-      } catch (err) {
-        const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
-        throw new Error(`ffmpeg concat failed: ${stderr.slice(-500)}`);
+        concatOk = true;
+      } catch {
+        concatOk = false;
+      }
+
+      if (!concatOk) {
+        // Slow path: normalize each chunk to 16kHz PCM WAV then re-encode.
+        // Done in small parallel batches so a 4-hour session doesn't
+        // take 10 minutes of sequential ffmpeg invocations.
+        const normalizedPaths: string[] = [];
+        const NORMALIZE_CONCURRENCY = 4;
+        for (let i = 0; i < chunkPaths.length; i += NORMALIZE_CONCURRENCY) {
+          const slice = chunkPaths.slice(i, i + NORMALIZE_CONCURRENCY);
+          const results = await Promise.all(
+            slice.map(async (chunkPath) => {
+              const normalizedPath = chunkPath.replace(/\.m4a$/, ".wav");
+              try {
+                execSync(
+                  `${shq(FFMPEG)} -analyzeduration 100M -probesize 100M -i ${shq(chunkPath)} -ac 1 -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
+                  { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
+                );
+                return normalizedPath;
+              } catch (err) {
+                const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+                try {
+                  execSync(
+                    `${shq(FFMPEG)} -f s16le -ar 44100 -ac 1 -i ${shq(chunkPath)} -ar 16000 -c:a pcm_s16le ${shq(normalizedPath)} -y`,
+                    { timeout: 120000, stdio: ["ignore", "ignore", "pipe"] }
+                  );
+                  return normalizedPath;
+                } catch (err2) {
+                  const stderr2 = (err2 as { stderr?: Buffer }).stderr?.toString() ?? "";
+                  throw new Error(`ffmpeg normalize failed: ${stderr.slice(-250)} | fallback: ${stderr2.slice(-250)}`);
+                }
+              }
+            })
+          );
+          normalizedPaths.push(...results);
+        }
+
+        writeFileSync(concatListPath, normalizedPaths.map((p) => `file '${p}'`).join("\n"));
+        try {
+          execSync(
+            `${shq(FFMPEG)} -f concat -safe 0 -i ${shq(concatListPath)} -c:a aac -b:a 64k ${shq(concatPath)} -y`,
+            { timeout: 240000, stdio: ["ignore", "ignore", "pipe"] }
+          );
+        } catch (err) {
+          const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+          throw new Error(`ffmpeg concat failed: ${stderr.slice(-500)}`);
+        }
       }
 
       const durationOutput = execSync(
@@ -391,48 +589,56 @@ export async function POST(request: Request) {
       ).trim();
       const totalDuration = parseFloat(durationOutput) || 0;
 
-      // --- 4. Transcribe the full session with Deepgram ---
-      const deepgramKey = process.env.DEEPGRAM_API_KEY;
-      if (!deepgramKey) {
-        throw new Error("DEEPGRAM_API_KEY not configured");
-      }
-      const audioBuffer = readFileSync(concatPath);
-      const dgResponse = await fetch(
-        "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&utterances=true&smart_format=true",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Token ${deepgramKey}`,
-            "Content-Type": "audio/mp4",
-          },
-          body: audioBuffer,
-        }
-      );
-      if (!dgResponse.ok) {
-        const text = await dgResponse.text().catch(() => "");
-        throw new Error(`Deepgram error ${dgResponse.status}: ${text.slice(0, 400)}`);
-      }
-      const dgResult = await dgResponse.json();
-      const requestId = dgResult.metadata?.request_id ?? null;
-      const utterances: DgUtterance[] = dgResult.results?.utterances ?? [];
+      // --- 4. Stitch per-chunk transcripts into session-global words ---
+      const stitched = stitchTranscripts(workChunks);
+      let allWords: DgWord[] = stitched.words;
+      let utterances: DgUtterance[] = stitched.utterances;
+      let repSpeaker = stitched.repSpeaker;
+      const requestId = stitched.sourceRequestIds[0] ?? null;
 
-      // Flatten words with speaker labels preserved. Fall back to the
-      // channels[0] alternatives word list if utterances were empty.
-      const allWords: DgWord[] = [];
-      for (const u of utterances) {
-        if (!u.words) continue;
-        for (const w of u.words) {
-          allWords.push({ ...w, speaker: w.speaker ?? u.speaker });
-        }
-      }
+      // --- 5. Emergency fallback: no per-chunk transcripts at all ---
+      // Should never happen in the Phase 4 flow, but if every chunk
+      // failed to transcribe upstream, send the full concat to
+      // Deepgram as a last resort. Old code path, preserved so no
+      // session ever silently produces zero conversations.
       if (allWords.length === 0) {
-        const chWords = (dgResult.results?.channels?.[0]?.alternatives?.[0]?.words ?? []) as DgWord[];
-        allWords.push(...chWords);
+        const deepgramKey = process.env.DEEPGRAM_API_KEY;
+        if (!deepgramKey) {
+          throw new Error("DEEPGRAM_API_KEY not configured");
+        }
+        const audioBuffer = readFileSync(concatPath);
+        const dgResponse = await fetch(
+          "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&utterances=true&smart_format=true",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Token ${deepgramKey}`,
+              "Content-Type": "audio/mp4",
+            },
+            body: new Uint8Array(audioBuffer),
+          }
+        );
+        if (!dgResponse.ok) {
+          const text = await dgResponse.text().catch(() => "");
+          throw new Error(`Deepgram fallback ${dgResponse.status}: ${text.slice(0, 400)}`);
+        }
+        const dgResult = await dgResponse.json();
+        utterances = dgResult.results?.utterances ?? [];
+        const fallbackWords: DgWord[] = [];
+        for (const u of utterances) {
+          if (!u.words) continue;
+          for (const w of u.words) {
+            fallbackWords.push({ ...w, speaker: w.speaker ?? u.speaker });
+          }
+        }
+        if (fallbackWords.length === 0) {
+          const chWords = (dgResult.results?.channels?.[0]?.alternatives?.[0]?.words ?? []) as DgWord[];
+          fallbackWords.push(...chWords);
+        }
+        fallbackWords.sort((a, b) => a.start - b.start);
+        allWords = fallbackWords;
+        repSpeaker = identifyRepSpeaker(utterances);
       }
-      allWords.sort((a, b) => a.start - b.start);
-
-      // --- 5. Identify rep speaker (stable across the whole session) ---
-      const repSpeaker = identifyRepSpeaker(utterances);
 
       // --- 6. Compute split boundaries ---
       let splitPoints = computeSplitPoints(allWords, points, repSpeaker, totalDuration);

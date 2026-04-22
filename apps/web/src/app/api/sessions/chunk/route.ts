@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { transcribeChunk } from "@/lib/chunk-transcribe";
+
+// The chunk handler itself stays fast (metadata write only). Deepgram
+// runs in `after()` so the mobile client returns quickly and the
+// transcription cost is absorbed in the same Fluid Compute instance.
+export const maxDuration = 300;
 
 function logChunk(
   status: number,
@@ -146,6 +153,37 @@ export async function POST(request: Request) {
       total_duration_s: totalDuration,
     })
     .eq("id", sessionId);
+
+  // Transcribe this chunk out-of-band. Phase 4: by the time the session
+  // is stopped and split runs, most chunks already have transcripts and
+  // split never has to touch Deepgram for the full recording.
+  after(async () => {
+    try {
+      const result = await transcribeChunk(sessionId, chunkIndex, storagePath);
+      if (!result.ok) {
+        console.warn(
+          JSON.stringify({
+            route: "/api/sessions/chunk",
+            reason: "transcribe_failed",
+            sessionId,
+            chunkIndex,
+            error: result.error,
+          })
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      console.error(
+        JSON.stringify({
+          route: "/api/sessions/chunk",
+          reason: "transcribe_exception",
+          sessionId,
+          chunkIndex,
+          error: message,
+        })
+      );
+    }
+  });
 
   logChunk(200, "ok", {
     userId: auth.user.id,
