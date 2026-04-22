@@ -8,6 +8,11 @@ import { setAudioModeAsync } from "expo-audio";
 import { recordingEngine } from "./RecordingEngine";
 import { uploadQueue } from "./UploadQueue";
 import { locationTracker } from "./LocationTracker";
+import {
+  nativeChunkRecorder,
+  type ChunkFinalizedEvent,
+  type RecorderStatusEvent,
+} from "./NativeChunkRecorder";
 import { CHUNK_DURATION_MS, API_BASE_URL } from "../../constants/recording";
 import { getCurrentLocation } from "../location";
 import { supabase } from "../../lib/supabase";
@@ -56,6 +61,15 @@ const STARTUP_GRACE_MS = 5000;
 // Require two consecutive "not recording" readings before rotating, to
 // filter out one-off flaky status reads.
 const CONSECUTIVE_MISSES_TO_RECOVER = 2;
+// If the native recorder has been going for more than this much real
+// wall-clock time, force a rotation even though the JS setInterval
+// didn't fire. iOS throttles JS timers aggressively when the app is
+// deep-backgrounded — a 4-hour recording with a 5-minute chunk
+// interval should produce ~48 chunks, but without this guard we can
+// end up with one giant chunk that split/upload can't handle.
+// 2x the interval gives iOS room to re-schedule a single late tick
+// without us over-rotating.
+const MAX_CHUNK_DURATION_MS = CHUNK_DURATION_MS * 2;
 
 // mixWithOthers so incidental sounds (notification chimes, Spotify from
 // another app, navigation voice) don't kill our recording. Real phone
@@ -86,6 +100,7 @@ export class ChunkManager {
   private lastRecordingStartAt = 0;
   private consecutiveMissedChecks = 0;
   private health: RecordingHealth = "stopped";
+  private usingNativeRecorder = false;
 
   setOnChunkComplete(callback: (index: number) => void) {
     this.onChunkComplete = callback;
@@ -138,6 +153,20 @@ export class ChunkManager {
     this.consecutiveMissedChecks = 0;
     this.setHealth("recording");
 
+    if (nativeChunkRecorder.isAvailable()) {
+      // Native path: AVAudioRecorder + DispatchSourceTimer own chunk
+      // rotation. JS just listens for chunkFinalized events and
+      // enqueues uploads. Skip the watchdog + JS rotation entirely —
+      // they're obsolete when native runs the show.
+      await this.startNativeSession(sessionId);
+      locationTracker.start(sessionId);
+      this.sendHeartbeat(sessionId);
+      this.heartbeat = setInterval(() => {
+        if (this.sessionId) this.sendHeartbeat(this.sessionId);
+      }, HEARTBEAT_INTERVAL_MS);
+      return;
+    }
+
     await recordingEngine.startRecording();
     this.lastRecordingStartAt = Date.now();
     locationTracker.start(sessionId);
@@ -172,6 +201,20 @@ export class ChunkManager {
       if (recordingEngine.isActuallyRecording()) {
         this.consecutiveMissedChecks = 0;
         this.setHealth("recording");
+
+        // Overdue chunk guard: if the rotation setInterval got throttled
+        // by iOS in deep background, force a rotation so we don't
+        // accumulate a monster chunk. Acts as a safety net — normal
+        // rotation still runs on the setInterval cadence.
+        const elapsed = Date.now() - this.lastRecordingStartAt;
+        if (elapsed >= MAX_CHUNK_DURATION_MS) {
+          uploadQueue.recordRecorderEvent(
+            this.sessionId,
+            this.chunkIndex,
+            `overdue chunk (${Math.round(elapsed / 1000)}s) — forcing rotation`
+          );
+          await this.rotateChunk();
+        }
         return;
       }
       // First miss: mark paused so the UI can warn the rep.
@@ -380,6 +423,17 @@ export class ChunkManager {
     this.setHealth("stopped");
     await locationTracker.stop();
 
+    if (this.usingNativeRecorder) {
+      try {
+        await nativeChunkRecorder.stopSession();
+      } catch (err) {
+        console.error("native stopSession failed:", err);
+      }
+      this.usingNativeRecorder = false;
+      this.sessionId = null;
+      return;
+    }
+
     if (recordingEngine.getIsRecording()) {
       try {
         const { uri, durationMs } = await recordingEngine.stopRecording();
@@ -398,6 +452,61 @@ export class ChunkManager {
     }
 
     this.sessionId = null;
+  }
+
+  /**
+   * Native-path wiring. Subscribes to chunkFinalized + recorderStatus
+   * from the native module and turns them into upload-queue entries
+   * and health updates. The native module is already handling chunk
+   * rotation and interruption recovery internally; JS is just an
+   * observer that feeds the upload pipeline.
+   */
+  private async startNativeSession(sessionId: string): Promise<void> {
+    this.usingNativeRecorder = true;
+
+    this.nativeSubs.push(
+      nativeChunkRecorder.onChunkFinalized(async (evt: ChunkFinalizedEvent) => {
+        if (this.sessionId !== evt.sessionId) return;
+        const coords = await getCurrentLocation();
+        uploadQueue.enqueue({
+          sessionId: evt.sessionId,
+          chunkIndex: evt.chunkIndex,
+          uri: `file://${evt.filePath}`,
+          durationSeconds: Math.round(evt.durationSeconds),
+          latitude: coords?.latitude ?? null,
+          longitude: coords?.longitude ?? null,
+        });
+        this.chunkIndex = evt.chunkIndex + 1;
+        this.onChunkComplete?.(evt.chunkIndex);
+      })
+    );
+
+    this.nativeSubs.push(
+      nativeChunkRecorder.onRecorderStatus((evt: RecorderStatusEvent) => {
+        if (!this.sessionId) return;
+        if (evt.state === "paused") {
+          this.setHealth("paused");
+        } else if (evt.state === "recording") {
+          this.setHealth("recording");
+        }
+      })
+    );
+
+    this.nativeSubs.push(
+      nativeChunkRecorder.onRecorderError((evt) => {
+        if (!this.sessionId) return;
+        uploadQueue.recordRecorderEvent(
+          this.sessionId,
+          this.chunkIndex,
+          `native recorder error [${evt.phase}]: ${evt.message}`
+        );
+      })
+    );
+
+    await nativeChunkRecorder.startSession(
+      sessionId,
+      Math.round(CHUNK_DURATION_MS / 1000)
+    );
   }
 
   getChunkIndex(): number {

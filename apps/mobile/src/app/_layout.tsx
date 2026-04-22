@@ -6,6 +6,7 @@ import type { AppStateStatus } from "react-native";
 import { useAuthStore } from "../stores/auth-store";
 import { uploadQueue } from "../services/recording/UploadQueue";
 import { useRecordingStore } from "../stores/recording-store";
+import { UploadProgressBanner } from "../components/upload-progress-banner";
 
 export default function RootLayout() {
   const { session, loading, initialize } = useAuthStore();
@@ -65,6 +66,7 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="light" />
+      {session && <UploadProgressBanner />}
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#09090b" } }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="auth" />

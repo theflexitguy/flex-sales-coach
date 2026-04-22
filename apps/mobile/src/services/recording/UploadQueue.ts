@@ -3,6 +3,11 @@ import NetInfo from "@react-native-community/netinfo";
 import * as FileSystem from "expo-file-system/legacy";
 import { API_BASE_URL } from "../../constants/recording";
 import { supabase } from "../../lib/supabase";
+import {
+  nativeBackgroundUploader,
+  type UploadCompletedEvent,
+  type UploadFailedEvent,
+} from "./NativeBackgroundUploader";
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 
@@ -14,6 +19,10 @@ interface ChunkUploadJob {
   latitude: number | null;
   longitude: number | null;
   retries: number;
+  // When set, this job has been handed to the native URLSession.background
+  // uploader and is awaiting a completion event. Do not re-upload.
+  nativeTaskId?: number;
+  storagePath?: string;
 }
 
 interface PendingComplete {
@@ -74,6 +83,24 @@ class UploadQueue {
         this.processNext();
       }
     });
+
+    // Wire native URLSession.background completion events into the JS
+    // queue. On iOS these events arrive even if the app was relaunched
+    // in the background to deliver them — the native module persists
+    // metadata across restarts so the event payload always carries the
+    // session/chunk info we need.
+    if (nativeBackgroundUploader.isAvailable()) {
+      nativeBackgroundUploader.onCompleted((evt) => {
+        this.handleNativeCompleted(evt).catch((err) => {
+          console.error("native-uploader onCompleted handler error", err);
+        });
+      });
+      nativeBackgroundUploader.onFailed((evt) => {
+        this.handleNativeFailed(evt).catch((err) => {
+          console.error("native-uploader onFailed handler error", err);
+        });
+      });
+    }
   }
 
   setOnStatusChange(callback: (uploaded: number, total: number) => void) {
@@ -282,68 +309,262 @@ class UploadQueue {
 
     this.processing = true;
 
-    const job = this.queue[0];
+    try {
+      if (nativeBackgroundUploader.isAvailable()) {
+        // Native path: hand off every idle job to URLSession.background
+        // in a tight loop. iOS will run them in parallel with its own
+        // scheduler; we just keep JS out of the critical path. Uploads
+        // continue even if the app is suspended or killed.
+        for (const job of this.queue) {
+          if (job.nativeTaskId != null) continue;
+          try {
+            await this.handoffToNative(job);
+          } catch (err) {
+            await this.handleUploadError(job, err, "handoff");
+          }
+        }
+      } else {
+        // JS fallback path — used on Android and dev builds without the
+        // native plugin. Serial upload, same behaviour as before the
+        // native path existed.
+        const job = this.queue[0];
+        try {
+          await this.uploadChunk(job);
+          this.queue.shift();
+          this.uploadedCount += 1;
+          await this.persist();
+          this.emitStatus();
+        } catch (error) {
+          await this.handleUploadError(job, error, "js-upload");
+        }
+      }
+    } finally {
+      this.processing = false;
+    }
+
+    if (this.queue.some((j) => j.nativeTaskId == null) && this.isOnline) {
+      this.processNext();
+    } else if (this.queue.length === 0) {
+      this.checkSessionCompletes();
+    }
+  }
+
+  private async handleUploadError(
+    job: ChunkUploadJob,
+    error: unknown,
+    _source: string
+  ): Promise<void> {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    const stage: UploadErrorRecord["stage"] =
+      error instanceof UploadStageError ? error.stage : "unknown";
+    const unrecoverable =
+      error instanceof UploadStageError && error.unrecoverable === true;
+    console.error(`Upload failed for chunk ${job.chunkIndex} [${stage}]: ${msg}`);
+    this.lastError = `Chunk ${job.chunkIndex} [${stage}]: ${msg}`;
+    if (!unrecoverable) {
+      this.onError?.(this.lastError);
+    }
+
+    const record: UploadErrorRecord = {
+      at: Date.now(),
+      sessionId: job.sessionId,
+      chunkIndex: job.chunkIndex,
+      retries: job.retries,
+      stage,
+      message: msg,
+    };
+    this.errors.unshift(record);
+    if (this.errors.length > ERROR_RING_SIZE) {
+      this.errors.length = ERROR_RING_SIZE;
+    }
+    await this.persistErrors();
+
+    if (!unrecoverable && !this.alertedForSessions.has(job.sessionId)) {
+      this.alertedForSessions.add(job.sessionId);
+      this.onFirstError?.(record);
+    }
+
+    if (unrecoverable || job.retries >= MAX_RETRIES) {
+      this.queue = this.queue.filter((j) => j !== job);
+      await this.persist();
+    } else {
+      job.retries += 1;
+      job.nativeTaskId = undefined;
+      await this.persist();
+      const delay = Math.min(BASE_DELAY_MS * Math.pow(2, job.retries), 60000);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+
+  /**
+   * Request a signed upload URL from the server and hand the file off
+   * to the native URLSession.background uploader. Resolves once the
+   * task has been enqueued by iOS; actual upload completion arrives
+   * via the native event listeners.
+   */
+  private async handoffToNative(job: ChunkUploadJob): Promise<void> {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new UploadStageError("auth", "No auth session");
+    }
+
+    const info = await FileSystem.getInfoAsync(job.uri);
+    if (!info.exists) {
+      throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
+    }
+
+    const urlRes = await fetch(`${API_BASE_URL}/api/sessions/chunk/upload-url`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId: job.sessionId,
+        chunkIndex: job.chunkIndex,
+      }),
+    });
+
+    if (!urlRes.ok) {
+      const text = await urlRes.text().catch(() => "");
+      throw new UploadStageError(
+        "auth",
+        `signed-url ${urlRes.status}: ${text.slice(0, 200)}`
+      );
+    }
+
+    const { signedUrl, storagePath }: { signedUrl: string; storagePath: string } =
+      await urlRes.json();
+
+    // Strip file:// prefix if present — URLSession.uploadTaskWithRequest:fromFile
+    // wants a plain filesystem path.
+    const localPath = job.uri.replace(/^file:\/\//, "");
+
+    const { taskId } = await nativeBackgroundUploader.enqueueUpload(
+      localPath,
+      signedUrl,
+      { "Content-Type": "audio/mp4" },
+      {
+        sessionId: job.sessionId,
+        chunkIndex: job.chunkIndex,
+        durationSeconds: job.durationSeconds,
+        latitude: job.latitude,
+        longitude: job.longitude,
+        storagePath,
+      }
+    );
+
+    job.nativeTaskId = taskId;
+    job.storagePath = storagePath;
+    await this.persist();
+    this.emitStatus();
+  }
+
+  private findJobByTaskId(taskId: number): ChunkUploadJob | undefined {
+    return this.queue.find((j) => j.nativeTaskId === taskId);
+  }
+
+  private async handleNativeCompleted(
+    event: UploadCompletedEvent
+  ): Promise<void> {
+    const job = this.findJobByTaskId(event.taskId);
+    // Use native metadata as fallback if we don't have a JS-side job
+    // (e.g. completion arrived after app was killed + relaunched and
+    // the queue wasn't fully restored yet).
+    const meta = event.metadata ?? {};
+    const sessionId = (job?.sessionId ?? (meta.sessionId as string | undefined)) ?? null;
+    const chunkIndex =
+      job?.chunkIndex ?? (meta.chunkIndex as number | undefined) ?? null;
+    const storagePath =
+      job?.storagePath ?? (meta.storagePath as string | undefined) ?? null;
+    const durationSeconds =
+      job?.durationSeconds ?? (meta.durationSeconds as number | undefined) ?? 0;
+    const latitude =
+      job?.latitude ?? ((meta.latitude as number | null | undefined) ?? null);
+    const longitude =
+      job?.longitude ?? ((meta.longitude as number | null | undefined) ?? null);
+
+    if (sessionId == null || chunkIndex == null || storagePath == null) {
+      // Can't register — log and drop. Session ensure-split sweep will
+      // still recover audio that actually landed in storage.
+      this.recordRecorderEvent(
+        sessionId ?? "unknown",
+        chunkIndex ?? -1,
+        `native upload completed but missing metadata; taskId=${event.taskId}`
+      );
+      return;
+    }
 
     try {
-      await this.uploadChunk(job);
-      this.queue.shift();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        throw new UploadStageError("auth", "No auth session at register-time");
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/sessions/chunk`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          chunkIndex,
+          storagePath,
+          durationSeconds,
+          latitude,
+          longitude,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new UploadStageError(
+          "metadata",
+          `register ${res.status}: ${text.slice(0, 200)}`
+        );
+      }
+
+      if (job) {
+        this.queue = this.queue.filter((j) => j !== job);
+      }
       this.uploadedCount += 1;
       await this.persist();
       this.emitStatus();
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      const stage: UploadErrorRecord["stage"] =
-        error instanceof UploadStageError ? error.stage : "unknown";
-      const unrecoverable =
-        error instanceof UploadStageError && error.unrecoverable === true;
-      console.error(`Upload failed for chunk ${job.chunkIndex} [${stage}]: ${msg}`);
-      this.lastError = `Chunk ${job.chunkIndex} [${stage}]: ${msg}`;
-      // Only surface live-upload errors to the UI banner. Stale/missing files
-      // from a prior session aren't actionable and shouldn't alarm the user.
-      if (!unrecoverable) {
-        this.onError?.(this.lastError);
-      }
-
-      const record: UploadErrorRecord = {
-        at: Date.now(),
-        sessionId: job.sessionId,
-        chunkIndex: job.chunkIndex,
-        retries: job.retries,
-        stage,
-        message: msg,
-      };
-      this.errors.unshift(record);
-      if (this.errors.length > ERROR_RING_SIZE) {
-        this.errors.length = ERROR_RING_SIZE;
-      }
-      await this.persistErrors();
-
-      // Only alert for recoverable failures — unrecoverable (stale/missing file)
-      // isn't actionable for the user and shouldn't look like a live problem.
-      if (!unrecoverable && !this.alertedForSessions.has(job.sessionId)) {
-        this.alertedForSessions.add(job.sessionId);
-        this.onFirstError?.(record);
-      }
-
-      if (unrecoverable || job.retries >= MAX_RETRIES) {
-        this.queue.shift();
-        await this.persist();
-      } else {
-        job.retries += 1;
-        await this.persist();
-        const delay = Math.min(BASE_DELAY_MS * Math.pow(2, job.retries), 60000);
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-
-    this.processing = false;
-
-    if (this.queue.length > 0) {
-      this.processNext();
-    } else {
-      // All uploads done — check if any sessions are ready to complete
       this.checkSessionCompletes();
+    } catch (err) {
+      if (job) {
+        await this.handleUploadError(job, err, "register-after-native");
+      } else {
+        const message = err instanceof Error ? err.message : "unknown";
+        this.recordRecorderEvent(
+          sessionId,
+          chunkIndex,
+          `post-native register failed: ${message}`
+        );
+      }
     }
+  }
+
+  private async handleNativeFailed(event: UploadFailedEvent): Promise<void> {
+    const job = this.findJobByTaskId(event.taskId);
+    if (!job) {
+      // Unknown task — nothing we can do. Likely from a previous app
+      // install or an already-removed job.
+      return;
+    }
+    await this.handleUploadError(
+      job,
+      new UploadStageError("storage", event.error || `HTTP ${event.status}`),
+      "native-upload"
+    );
+    // Kick the queue so retries with a fresh signed URL happen promptly.
+    this.processNext();
   }
 
   private async uploadChunk(job: ChunkUploadJob): Promise<void> {

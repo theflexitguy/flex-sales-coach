@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { chunkManager, type RecordingHealth } from "../services/recording/ChunkManager";
 import { uploadQueue } from "../services/recording/UploadQueue";
 import { recordingEngine } from "../services/recording/RecordingEngine";
+import { nativeChunkRecorder } from "../services/recording/NativeChunkRecorder";
 import { apiGet, apiPost } from "../services/api";
 import { requestLocationPermission, getCurrentLocation } from "../services/location";
 
@@ -144,6 +145,15 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
 
   updateMetering: async () => {
     if (!get().isRecording) return;
+    // Native-path recorder owns the AVAudioRecorder when available —
+    // the JS recordingEngine is unused, so its getStatus returns null.
+    if (nativeChunkRecorder.isAvailable()) {
+      const status = await nativeChunkRecorder.getStatus();
+      if (status?.isRecording && typeof status.metering === "number") {
+        set({ meteringDb: status.metering });
+      }
+      return;
+    }
     const status = await recordingEngine.getStatus();
     if (status) set({ meteringDb: status.metering });
   },
