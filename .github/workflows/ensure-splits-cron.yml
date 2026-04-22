@@ -1,0 +1,32 @@
+name: ensure-splits-cron
+
+# Scheduled ping that drives the stuck-session recovery sweep. Runs on
+# GitHub Actions instead of Vercel Cron because Vercel Hobby caps cron
+# frequency to once-per-day; this app needs every-5-minutes cadence so
+# a rep never has a recording stuck for longer than a 5-min window.
+#
+# Server-side logic in /api/cron/ensure-splits. Authenticates via
+# Authorization: Bearer ${{ secrets.CRON_SECRET }} OR via the
+# x-internal-secret header fallback.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call ensure-splits
+        run: |
+          curl -sS -o /tmp/response.txt -w "HTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-internal-secret: ${INTERNAL_API_SECRET}" \
+            "${BASE_URL}/api/cron/ensure-splits" | tee /tmp/status.txt
+          cat /tmp/response.txt || true
+          grep -q "HTTP 200" /tmp/status.txt
+        env:
+          BASE_URL: ${{ vars.PRODUCTION_URL || 'https://flex-sales-coach-web.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
