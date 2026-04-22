@@ -46,12 +46,13 @@ const SPEAKER_CONTEXT_S = 30;             // window we sample speakers in for pr
 const FALLBACK_SILENCE_THRESHOLD_DB = -15;
 const FALLBACK_SILENCE_DURATION_S = 15;
 
-// 800s is the Vercel Pro ceiling on Fluid Compute. A 4-hour session with
-// 240+ chunks + Deepgram transcription + segment extraction needs every
-// second of it. Phase 4 pushes transcription per-chunk so most of the
-// expensive work is already done by the time split runs, but keep the
-// big ceiling here as a safety net for legacy sessions.
-export const maxDuration = 800;
+// Vercel Hobby caps maxDuration at 300. Phase 4 per-chunk transcription
+// is what actually makes long recordings fit: by the time split runs,
+// most chunks are already transcribed (/api/sessions/chunk does it in
+// after()), so split just stitches + concats audio + cuts segments.
+// That easily fits in 300s even for multi-hour sessions. If we ever
+// upgrade to Pro, bump this back up as a safety net.
+export const maxDuration = 300;
 
 type DgWord = ChunkWord;
 
