@@ -4,23 +4,22 @@
 // JavaScript-driven uploads via fetch() stop the moment iOS suspends the
 // app (typically ~30 seconds after backgrounding with no audio activity).
 // For a rep who hits Stop at end-of-day and walks to their truck, that
-// strands dozens of chunks in the in-memory queue. The JS upload queue
-// in services/recording/UploadQueue.ts is a decent retry loop but only
-// runs while JS can run.
+// strands dozens of chunks in the in-memory queue.
 //
 // URLSession with a background configuration hands the uploads off to
 // the OS. iOS continues uploads even if the app is suspended or killed
 // — and relaunches the app in the background to deliver completion
 // events. This is the same mechanism Siro's native SDK uses.
 //
-// Constraints imposed by URLSession.background:
-//   - only uploadTaskWithRequest:fromFile: works (no fromData)
-//   - session identifier must be stable across launches
-//   - the task delegate must be the session delegate, not a per-task
-//     delegate
-//   - completion handlers must be called from
-//     application:handleEventsForBackgroundURLSession:completionHandler:
-//     so iOS knows we're done processing
+// Architecture:
+//   - FlexBackgroundUploader: tiny plain-ObjC class with class methods
+//     only. AppDelegate.swift (Swift) calls these to hand off iOS's
+//     background-events completion handler. Static storage survives
+//     even when the React Native bridge is torn down and rebuilt.
+//   - FlexBackgroundUploaderRCT: RCTEventEmitter subclass that owns
+//     the NSURLSession instance, the in-flight task metadata, and all
+//     React Native exported methods. Registered under the exported
+//     module name "FlexBackgroundUploader" so JS finds it.
 #import "FlexBackgroundUploader.h"
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
@@ -41,23 +40,6 @@ static NSString *const kEventFailed = @"uploadFailed";
 static NSMutableDictionary<NSString *, void (^)(void)> *sCompletionHandlers;
 static dispatch_queue_t sCompletionHandlersQueue;
 
-@interface FlexBackgroundUploader () <
-    NSURLSessionDelegate,
-    NSURLSessionTaskDelegate>
-@property(nonatomic, strong) NSURLSession *session;
-@property(nonatomic, strong)
-    NSMutableDictionary<NSString *, NSDictionary *> *taskMetadata;
-@property(nonatomic, assign) BOOL hasListeners;
-@end
-
-// React Native bridge class that inherits from RCTEventEmitter. The
-// actual uploader logic lives on the public-interface class so it's
-// accessible to Swift AppDelegate via the bridging header.
-@interface FlexBackgroundUploaderRCT : RCTEventEmitter
-@end
-
-static FlexBackgroundUploaderRCT *sUploaderInstance;
-
 @implementation FlexBackgroundUploader
 
 + (NSString *)sessionIdentifier {
@@ -68,7 +50,8 @@ static FlexBackgroundUploaderRCT *sUploaderInstance;
   if (self == [FlexBackgroundUploader class]) {
     sCompletionHandlers = [NSMutableDictionary dictionary];
     sCompletionHandlersQueue = dispatch_queue_create(
-        "com.flexpestcontrol.salescoach.bgupload.handlers", DISPATCH_QUEUE_SERIAL);
+        "com.flexpestcontrol.salescoach.bgupload.handlers",
+        DISPATCH_QUEUE_SERIAL);
   }
 }
 
@@ -92,6 +75,17 @@ static FlexBackgroundUploaderRCT *sUploaderInstance;
 
 @end
 
+#pragma mark - React Native module
+
+@interface FlexBackgroundUploaderRCT : RCTEventEmitter <
+    NSURLSessionDelegate,
+    NSURLSessionTaskDelegate>
+@property(nonatomic, strong) NSURLSession *session;
+@property(nonatomic, strong)
+    NSMutableDictionary<NSString *, NSDictionary *> *taskMetadata;
+@property(nonatomic, assign) BOOL hasListeners;
+@end
+
 @implementation FlexBackgroundUploaderRCT
 
 RCT_EXPORT_MODULE(FlexBackgroundUploader)
@@ -102,7 +96,6 @@ RCT_EXPORT_MODULE(FlexBackgroundUploader)
 
 - (instancetype)init {
   if ((self = [super init])) {
-    sUploaderInstance = self;
     _taskMetadata = [[self loadMetadataFromDisk] mutableCopy]
                         ?: [NSMutableDictionary dictionary];
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration
@@ -110,8 +103,8 @@ RCT_EXPORT_MODULE(FlexBackgroundUploader)
     config.sessionSendsLaunchEvents = YES;
     config.discretionary = NO;
     config.allowsCellularAccess = YES;
-    // Timeouts: give the OS room to upload over flaky cell. iOS will
-    // retry internally across network availability changes.
+    // Give the OS room to upload over flaky cell. iOS retries internally
+    // across network availability changes.
     config.timeoutIntervalForRequest = 120;
     config.timeoutIntervalForResource = 60 * 60 * 6;
     _session = [NSURLSession sessionWithConfiguration:config
@@ -176,17 +169,17 @@ RCT_EXPORT_METHOD(enqueueUpload
 RCT_EXPORT_METHOD(cancelAll
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject) {
-  [self.session
-      getAllTasksWithCompletionHandler:^(NSArray<__kindof NSURLSessionTask *> *tasks) {
-        for (NSURLSessionTask *t in tasks) {
-          [t cancel];
-        }
-        @synchronized(self.taskMetadata) {
-          [self.taskMetadata removeAllObjects];
-          [self persistMetadataToDisk];
-        }
-        resolve(@(tasks.count));
-      }];
+  [self.session getAllTasksWithCompletionHandler:^(
+                    NSArray<__kindof NSURLSessionTask *> *tasks) {
+    for (NSURLSessionTask *t in tasks) {
+      [t cancel];
+    }
+    @synchronized(self.taskMetadata) {
+      [self.taskMetadata removeAllObjects];
+      [self persistMetadataToDisk];
+    }
+    resolve(@(tasks.count));
+  }];
 }
 
 RCT_EXPORT_METHOD(getPendingCount
