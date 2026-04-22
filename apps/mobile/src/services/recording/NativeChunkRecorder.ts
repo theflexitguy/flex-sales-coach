@@ -33,6 +33,8 @@ export interface ChunkFinalizedEvent {
   filePath: string;
   durationSeconds: number;
   final?: boolean;
+  rotationAttempts?: number;
+  rotationSuccesses?: number;
 }
 
 export interface RecorderStatusEvent {
@@ -43,6 +45,9 @@ export interface RecorderStatusEvent {
 export interface RecorderErrorEvent {
   phase: string;
   message: string;
+  attempt?: number;
+  rotationAttempts?: number;
+  rotationSuccesses?: number;
 }
 
 const nativeModule: FlexChunkRecorderModule | undefined = (

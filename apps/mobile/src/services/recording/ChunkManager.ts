@@ -478,6 +478,22 @@ export class ChunkManager {
         });
         this.chunkIndex = evt.chunkIndex + 1;
         this.onChunkComplete?.(evt.chunkIndex);
+        // Surface rotation telemetry in Diagnostics so the next
+        // truncated-recording report has actionable data: if
+        // rotationAttempts is stuck but new chunks stop landing, the
+        // bug is on the upload side; if rotationAttempts also stops
+        // incrementing, the rotator itself died.
+        if (evt.rotationAttempts != null || evt.rotationSuccesses != null) {
+          uploadQueue.recordRecorderEvent(
+            evt.sessionId,
+            evt.chunkIndex,
+            `chunk ${evt.chunkIndex} finalized (${Math.round(
+              evt.durationSeconds
+            )}s) — rotations attempted=${evt.rotationAttempts ?? "?"} succeeded=${
+              evt.rotationSuccesses ?? "?"
+            }`
+          );
+        }
       })
     );
 
@@ -495,10 +511,16 @@ export class ChunkManager {
     this.nativeSubs.push(
       nativeChunkRecorder.onRecorderError((evt) => {
         if (!this.sessionId) return;
+        const retryInfo =
+          evt.attempt != null ? ` (attempt ${evt.attempt})` : "";
+        const stats =
+          evt.rotationAttempts != null
+            ? ` attempts=${evt.rotationAttempts} successes=${evt.rotationSuccesses}`
+            : "";
         uploadQueue.recordRecorderEvent(
           this.sessionId,
           this.chunkIndex,
-          `native recorder error [${evt.phase}]: ${evt.message}`
+          `native recorder error [${evt.phase}]${retryInfo}: ${evt.message}${stats}`
         );
       })
     );

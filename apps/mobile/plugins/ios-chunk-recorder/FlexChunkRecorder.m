@@ -36,6 +36,11 @@ static NSString *const kEventRecorderError = @"recorderError";
 @property(nonatomic, assign) NSTimeInterval chunkStartedAt;
 @property(nonatomic, assign) NSTimeInterval chunkDurationSeconds;
 @property(nonatomic, assign) BOOL hasListeners;
+// Monotonic rotation counter surfaced through recorderStatus events.
+// Lets us tell from the Diagnostics ring buffer "rotation fired 12
+// times but only 2 chunks landed" vs "rotation stopped firing at 2".
+@property(nonatomic, assign) NSInteger rotationAttemptCount;
+@property(nonatomic, assign) NSInteger rotationSuccessCount;
 @end
 
 @implementation FlexChunkRecorder
@@ -141,7 +146,18 @@ RCT_EXPORT_MODULE()
   return recorder;
 }
 
-- (BOOL)startChunkWithError:(NSError **)error {
+/**
+ * Initial-chunk bring-up only. For rotation (chunk N → N+1) we use the
+ * seamless path below that overlaps old + new recorders. Starting
+ * chunk 0 is the one case where there's no "old" recorder to overlap
+ * with, so a plain start is fine here.
+ */
+- (BOOL)startFirstChunkWithError:(NSError **)error {
+  NSError *sessionErr = nil;
+  if (![[AVAudioSession sharedInstance] setActive:YES error:&sessionErr]) {
+    if (error) *error = sessionErr;
+    return NO;
+  }
   NSString *path =
       [self chunkPathForSession:self.sessionId index:self.chunkIndex];
   NSError *err = nil;
@@ -172,32 +188,132 @@ RCT_EXPORT_MODULE()
   return YES;
 }
 
+/**
+ * Seamless chunk rotation (Phase 2 of the mic-indicator fix).
+ *
+ * The old rotation order was:
+ *   1. [current stop]        ← no active AVAudioRecorder
+ *   2. [self.recorder = nil]
+ *   3. start a new recorder  ← 50-150ms gap
+ *
+ * In deep-background, iOS would observe the empty gap, deactivate our
+ * audio session, and the new recorder's record() returned NO. Every
+ * subsequent 5-min tick hit the same dead session and failed too, so
+ * sessions silently capped at 2 chunks (the first rotation, from a
+ * still-fresh session, worked; every rotation after that didn't).
+ *
+ * New order:
+ *   1. UIApplication beginBackgroundTask — tell iOS we're working so
+ *      suspension can't hit during the transition.
+ *   2. AVAudioSession setActive:YES — defensive; cheap, idempotent.
+ *   3. Build + prepareToRecord + record on the NEW recorder.
+ *   4. Stop the OLD recorder.
+ *   5. Swap self.recorder, emit chunkFinalized for the old chunk.
+ *   6. endBackgroundTask.
+ *
+ * Between 3 and 4 there are briefly TWO active AVAudioRecorders on the
+ * same AVAudioSession. That's supported on iOS — both capture the
+ * shared mic input, the tiny overlap (< one block of samples in
+ * practice) is trimmed by EDGE_SILENCE_TRIM_S on the server. What we
+ * gain is that there's NEVER a moment without an active recorder, so
+ * iOS has no reason to tear the session down.
+ *
+ * On failure, retry after 500ms (up to MAX_ROTATION_RETRIES) instead
+ * of waiting for the next 5-min timer tick.
+ */
+static const NSInteger kMaxRotationRetries = 10;
+static const int64_t kRotationRetryNsec = 500 * NSEC_PER_MSEC;
+
 - (void)rotateChunk {
+  // DispatchSourceTimer fires on its own queue. Hop to main for
+  // UIApplication + to serialise all rotation work on one thread.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self rotateChunkAttempt:0];
+  });
+}
+
+- (void)rotateChunkAttempt:(NSInteger)attempt {
   if (!self.sessionId) return;
 
-  AVAudioRecorder *current = self.recorder;
-  NSInteger finalizedIndex = self.chunkIndex;
-  NSString *finalizedPath = current.url.path;
-  NSTimeInterval durationSec =
-      [[NSDate date] timeIntervalSince1970] - self.chunkStartedAt;
+  self.rotationAttemptCount += 1;
 
-  if (current) {
-    [current stop];
+  UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+  if ([NSThread isMainThread]) {
+    bgTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithName:@"FlexChunkRotation"
+                  expirationHandler:^{
+                    // iOS is about to terminate us. Nothing we can do
+                    // beyond letting the task end gracefully.
+                  }];
   }
 
-  self.recorder = nil;
-  self.chunkIndex = finalizedIndex + 1;
+  // Defensive session reactivation. Cheap, idempotent, and fixes the
+  // deep-background failure mode.
+  NSError *sessionErr = nil;
+  [[AVAudioSession sharedInstance] setActive:YES error:&sessionErr];
 
-  NSError *err = nil;
-  if (![self startChunkWithError:&err]) {
+  // Build + start the NEW recorder before stopping the old one.
+  NSInteger nextIndex = self.chunkIndex + 1;
+  NSString *newPath = [self chunkPathForSession:self.sessionId
+                                          index:nextIndex];
+  NSError *buildErr = nil;
+  AVAudioRecorder *newRecorder = [self buildRecorderAtPath:newPath
+                                                     error:&buildErr];
+  NSString *failReason = nil;
+  if (!newRecorder || buildErr) {
+    failReason = [NSString
+        stringWithFormat:@"build failed: %@",
+                         buildErr.localizedDescription ?: @"unknown"];
+  } else {
+    newRecorder.delegate = self;
+    if (![newRecorder prepareToRecord]) {
+      failReason = @"prepareToRecord returned NO";
+    } else if (![newRecorder record]) {
+      failReason = [NSString
+          stringWithFormat:@"record() returned NO; session setActive err=%@",
+                           sessionErr.localizedDescription ?: @"none"];
+    }
+  }
+
+  if (failReason) {
     if (self.hasListeners) {
       [self sendEventWithName:kEventRecorderError
                          body:@{
                            @"phase" : @"rotate",
-                           @"message" : err.localizedDescription ?: @"unknown",
+                           @"attempt" : @(attempt),
+                           @"message" : failReason,
+                           @"rotationAttempts" : @(self.rotationAttemptCount),
+                           @"rotationSuccesses" : @(self.rotationSuccessCount),
                          }];
     }
+    if (bgTask != UIBackgroundTaskInvalid) {
+      [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+    }
+    if (attempt < kMaxRotationRetries) {
+      dispatch_after(
+          dispatch_time(DISPATCH_TIME_NOW, kRotationRetryNsec),
+          dispatch_get_main_queue(), ^{
+            [self rotateChunkAttempt:attempt + 1];
+          });
+    }
+    return;
   }
+
+  // New recorder is active. Now finalize the old one.
+  AVAudioRecorder *old = self.recorder;
+  NSInteger finalizedIndex = self.chunkIndex;
+  NSString *finalizedPath = old.url.path;
+  NSTimeInterval durationSec =
+      [[NSDate date] timeIntervalSince1970] - self.chunkStartedAt;
+
+  if (old) {
+    [old stop];
+  }
+
+  self.recorder = newRecorder;
+  self.chunkIndex = nextIndex;
+  self.chunkStartedAt = [[NSDate date] timeIntervalSince1970];
+  self.rotationSuccessCount += 1;
 
   if (finalizedPath && self.hasListeners) {
     [self sendEventWithName:kEventChunkFinalized
@@ -206,7 +322,13 @@ RCT_EXPORT_MODULE()
                          @"chunkIndex" : @(finalizedIndex),
                          @"filePath" : finalizedPath,
                          @"durationSeconds" : @(durationSec),
+                         @"rotationAttempts" : @(self.rotationAttemptCount),
+                         @"rotationSuccesses" : @(self.rotationSuccessCount),
                        }];
+  }
+
+  if (bgTask != UIBackgroundTaskInvalid) {
+    [[UIApplication sharedApplication] endBackgroundTask:bgTask];
   }
 }
 
@@ -309,7 +431,7 @@ RCT_EXPORT_METHOD(startSession
     return;
   }
 
-  if (![self startChunkWithError:&err]) {
+  if (![self startFirstChunkWithError:&err]) {
     self.sessionId = nil;
     reject(@"recorder_start",
            err.localizedDescription ?: @"recorder failed to start",
@@ -317,6 +439,8 @@ RCT_EXPORT_METHOD(startSession
     return;
   }
 
+  self.rotationAttemptCount = 0;
+  self.rotationSuccessCount = 0;
   [self startRotateTimer];
   resolve(@{@"ok" : @YES});
 }
