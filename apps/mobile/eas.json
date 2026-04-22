@@ -14,7 +14,7 @@
         "APP_VARIANT": "development",
         "EXPO_PUBLIC_SUPABASE_URL": "https://nyurioatyyjolpecpjzn.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55dXJpb2F0eXlqb2xwZWNwanpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMDYwNDYsImV4cCI6MjA5MTY4MjA0Nn0.KmJ_vm4MbpjXkQfCDOxJMm0_J6dTM_lT_2hFZ7vZvR8",
-        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach-web.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach.vercel.app"
       }
     },
     "preview": {
@@ -25,14 +25,14 @@
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://nyurioatyyjolpecpjzn.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55dXJpb2F0eXlqb2xwZWNwanpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMDYwNDYsImV4cCI6MjA5MTY4MjA0Nn0.KmJ_vm4MbpjXkQfCDOxJMm0_J6dTM_lT_2hFZ7vZvR8",
-        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach-web.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach.vercel.app"
       }
     },
     "production": {
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://nyurioatyyjolpecpjzn.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55dXJpb2F0eXlqb2xwZWNwanpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMDYwNDYsImV4cCI6MjA5MTY4MjA0Nn0.KmJ_vm4MbpjXkQfCDOxJMm0_J6dTM_lT_2hFZ7vZvR8",
-        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach-web.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://flex-sales-coach.vercel.app"
       }
     }
   },
