@@ -62,7 +62,11 @@ async function callDeepgram(audio: Buffer): Promise<ChunkTranscript> {
   if (!key) throw new Error("DEEPGRAM_API_KEY missing");
 
   const res = await fetch(
-    "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&utterances=true&smart_format=true",
+    "https://api.deepgram.com/v1/listen?model=nova-3&diarize=true&punctuate=true&utterances=true&smart_format=true" +
+    "&keyterm=pest%20control:5&keyterm=mosquito:5&keyterm=termite:5&keyterm=rodent:5" +
+    "&keyterm=cockroach:5&keyterm=bedbug:5&keyterm=spider:5&keyterm=Sentricon:10" +
+    "&keyterm=Terminix:5&keyterm=Orkin:5&keyterm=quarterly:3&keyterm=inspection:3" +
+    "&keyterm=infestation:3&keyterm=treatment:3&keyterm=exterminator:3",
     {
       method: "POST",
       headers: {
