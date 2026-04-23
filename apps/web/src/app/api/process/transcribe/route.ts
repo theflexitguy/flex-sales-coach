@@ -42,9 +42,15 @@ export async function POST(request: Request) {
       throw new Error("Failed to generate signed URL for audio");
     }
 
-    // Send to Deepgram for transcription with diarization
+    // Send to Deepgram for transcription with diarization.
+    // nova-3 is meaningfully more accurate on noisy/outdoor audio.
+    // keyterm boosting improves recognition of pest-control vocabulary.
     const dgResponse = await fetch(
-      "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&utterances=true&smart_format=true",
+      "https://api.deepgram.com/v1/listen?model=nova-3&diarize=true&punctuate=true&utterances=true&smart_format=true" +
+      "&keyterm=pest%20control:5&keyterm=mosquito:5&keyterm=termite:5&keyterm=rodent:5" +
+      "&keyterm=cockroach:5&keyterm=bedbug:5&keyterm=spider:5&keyterm=Sentricon:10" +
+      "&keyterm=Terminix:5&keyterm=Orkin:5&keyterm=quarterly:3&keyterm=inspection:3" +
+      "&keyterm=infestation:3&keyterm=treatment:3&keyterm=exterminator:3",
       {
         method: "POST",
         headers: {
@@ -81,14 +87,20 @@ export async function POST(request: Request) {
       const text = utts.map((u) => u.transcript).join(" ").toLowerCase();
       const totalWords = text.split(/\s+/).filter(Boolean).length;
       let score = 0;
+      // First-speaker bonus: in D2D sales the rep always initiates after knocking
+      const firstUtteranceStart = Math.min(...utts.map((u) => u.start));
+      const firstGlobalStart = Math.min(...typedUtterances.map((u) => u.start));
+      if (firstUtteranceStart === firstGlobalStart) score += 4;
       // Introduction phrases (strong rep signal)
       if (/\b(my name is|i'?m (?:with|from)|this is) /i.test(text)) score += 5;
       // Product / sales phrases
-      if (/\b(pest control|mosquito|spray|service|protect|treatment|lawn|termite)\b/i.test(text)) score += 3;
-      if (/\b(special|discount|promotion|offer|free estimate|quote)\b/i.test(text)) score += 2;
+      if (/\b(pest control|mosquito|spray|service|protect|treatment|lawn|termite|rodent|cockroach|bedbug|spider|infestation|exterminator)\b/i.test(text)) score += 3;
+      if (/\b(special|discount|promotion|offer|free estimate|quote|contract|agreement|sign up|schedule)\b/i.test(text)) score += 2;
       // Permission / opener phrases
       if (/\b(quick question|minute of your time|real quick|got a second)\b/i.test(text)) score += 2;
       if (/\b(hey there|hi there|how'?s it going|good (?:morning|afternoon|evening))\b/i.test(text)) score += 1;
+      // D2D context phrases
+      if (/\b(homeowner|neighbor|neighborhood|your home|today only|limited time)\b/i.test(text)) score += 2;
       // Word count bonus: rep usually talks 2-3x more
       score += Math.min(totalWords / 50, 5);
       return score;
