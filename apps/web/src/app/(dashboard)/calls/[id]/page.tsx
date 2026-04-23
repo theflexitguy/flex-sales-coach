@@ -62,10 +62,12 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     responsesByRequest.get(key)!.push(r);
   }
 
-  // Get signed audio URL
+  // Get signed audio URL via admin — access is already enforced by the
+  // calls RLS check above; the call-recordings bucket's SELECT policy may
+  // not include shared users, which would otherwise return null here.
   let audioUrl: string | null = null;
   if (call.audio_storage_path) {
-    const { data: signedData } = await supabase.storage
+    const { data: signedData } = await admin.storage
       .from("call-recordings")
       .createSignedUrl(call.audio_storage_path, 3600);
     audioUrl = signedData?.signedUrl ?? null;
