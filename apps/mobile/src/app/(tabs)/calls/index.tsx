@@ -135,16 +135,16 @@ export default function CallsListScreen() {
         />
       }
       ListHeaderComponent={
-        isManager ? (
-          <View>
-            <View style={styles.toggleRow}>
-              <TouchableOpacity
-                style={[styles.toggleButton, filter === "mine" && styles.toggleActive]}
-                onPress={() => { setFilter("mine"); setSelectedRepId(null); }}
-              >
-                <Ionicons name="person" size={16} color={filter === "mine" ? "#35b2ff" : "#71717a"} />
-                <Text style={[styles.toggleText, filter === "mine" && styles.toggleTextActive]}>My Calls</Text>
-              </TouchableOpacity>
+        <View>
+          <View style={styles.toggleRow}>
+            <TouchableOpacity
+              style={[styles.toggleButton, filter === "mine" && styles.toggleActive]}
+              onPress={() => { setFilter("mine"); setSelectedRepId(null); }}
+            >
+              <Ionicons name="person" size={16} color={filter === "mine" ? "#35b2ff" : "#71717a"} />
+              <Text style={[styles.toggleText, filter === "mine" && styles.toggleTextActive]}>My Calls</Text>
+            </TouchableOpacity>
+            {isManager ? (
               <TouchableOpacity
                 style={[styles.toggleButton, filter === "team" && styles.toggleActive]}
                 onPress={() => setFilter("team")}
@@ -152,8 +152,17 @@ export default function CallsListScreen() {
                 <Ionicons name="people" size={16} color={filter === "team" ? "#35b2ff" : "#71717a"} />
                 <Text style={[styles.toggleText, filter === "team" && styles.toggleTextActive]}>Team</Text>
               </TouchableOpacity>
-            </View>
-            {filter === "team" && teamMembers.length > 0 && (
+            ) : (
+              <TouchableOpacity
+                style={[styles.toggleButton, filter === "shared" && styles.toggleActive]}
+                onPress={() => setFilter("shared")}
+              >
+                <Ionicons name="share-social" size={16} color={filter === "shared" ? "#35b2ff" : "#71717a"} />
+                <Text style={[styles.toggleText, filter === "shared" && styles.toggleTextActive]}>Shared</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {isManager && filter === "team" && teamMembers.length > 0 && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.repFilterRow} contentContainerStyle={{ paddingHorizontal: 16, gap: 6 }}>
                 <TouchableOpacity
                   style={[styles.repChip, !selectedRepId && styles.repChipActive]}
@@ -170,20 +179,25 @@ export default function CallsListScreen() {
                     <Text style={[styles.repChipText, selectedRepId === m.id && styles.repChipTextActive]}>{m.fullName}</Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
-            )}
-          </View>
-        ) : null
+            </ScrollView>
+          )}
+        </View>
       }
       ListEmptyComponent={
         <View style={styles.empty}>
           <Ionicons name="mic-off-outline" size={48} color="#3f3f46" />
           <Text style={styles.emptyTitle}>
-            {filter === "team" ? "No team conversations" : "No conversations yet"}
+            {filter === "team"
+              ? "No team conversations"
+              : filter === "shared"
+              ? "Nothing shared with you yet"
+              : "No conversations yet"}
           </Text>
           <Text style={styles.emptySubtitle}>
             {filter === "team"
               ? "Your reps' conversations will appear here"
+              : filter === "shared"
+              ? "Conversations your manager shares will appear here"
               : "Record a conversation to see it here"}
           </Text>
         </View>
