@@ -97,6 +97,28 @@ export async function GET(request: Request) {
     }
   }
 
+  // Fetch share info so the list can show who each call is shared with.
+  const shareMap: Record<string, { userId: string; userName: string }[]> = {};
+  if (callIds.length > 0) {
+    const { data: shares } = await supabase
+      .from("call_shares")
+      .select("call_id, user_id")
+      .in("call_id", callIds);
+    const shareUserIds = [...new Set((shares ?? []).map((s) => s.user_id))];
+    const shareNameMap: Record<string, string> = {};
+    if (shareUserIds.length > 0) {
+      const { data: shareProfiles } = await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", shareUserIds);
+      for (const p of shareProfiles ?? []) shareNameMap[p.id] = p.full_name;
+    }
+    for (const s of shares ?? []) {
+      if (!shareMap[s.call_id]) shareMap[s.call_id] = [];
+      shareMap[s.call_id].push({ userId: s.user_id, userName: shareNameMap[s.user_id] ?? "Unknown" });
+    }
+  }
+
   // Score filtering (post-query since it's a join)
   let results = filteredCalls.map((c) => ({
     id: c.id,
@@ -110,6 +132,7 @@ export async function GET(request: Request) {
     overallGrade: scoreMap[c.id]?.grade ?? null,
     summary: scoreMap[c.id]?.summary ?? null,
     snippet: snippetMap[c.id] ?? null,
+    shares: shareMap[c.id] ?? [],
   }));
 
   if (minScore) results = results.filter((r) => (r.overallScore ?? 0) >= parseInt(minScore, 10));
