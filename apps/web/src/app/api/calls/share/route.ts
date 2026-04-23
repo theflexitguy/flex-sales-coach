@@ -31,6 +31,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "One or more calls not found" }, { status: 404 });
   }
 
+  // Enforce authorization: caller must own each call (rep_id) or manage its team.
+  const teamIds = [...new Set(calls.map((c) => c.team_id))];
+  const { data: managedTeams } = await admin
+    .from("teams")
+    .select("id")
+    .in("id", teamIds)
+    .eq("manager_id", auth.user.id);
+  const managedTeamIds = new Set((managedTeams ?? []).map((t) => t.id));
+
+  const unauthorized = calls.filter(
+    (c) => c.rep_id !== auth.user.id && !managedTeamIds.has(c.team_id)
+  );
+  if (unauthorized.length > 0) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   // For "everyone", resolve to all active team members across all relevant teams.
   let targetIds: string[];
   if (userIds === "everyone") {

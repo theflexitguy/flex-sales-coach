@@ -56,8 +56,16 @@ export function CallsListEnhanced({ reps, isManager }: { reps: Rep[]; isManager:
 
     const res = await fetch(`/api/search?${params}`);
     const data = await res.json();
-    setCalls(data.calls ?? []);
+    const freshCalls: CallResult[] = data.calls ?? [];
+    setCalls(freshCalls);
     setTotal(data.total ?? 0);
+    // Drop any selected IDs that are no longer in the current result set so
+    // stale selections can't survive a filter/search change.
+    const freshIdSet = new Set(freshCalls.map((c) => c.id));
+    setSelectedIds((prev) => {
+      const next = new Set([...prev].filter((id) => freshIdSet.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
     setLoading(false);
   }, [search, repFilter, dateFrom, dateTo, scoreRange, statusFilter]);
 
