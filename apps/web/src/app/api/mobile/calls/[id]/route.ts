@@ -42,7 +42,9 @@ export async function GET(
     supabase.from("help_requests").select("*").eq("call_id", id).order("created_at"),
   ]);
 
-  // Fetch responses with admin client to avoid nested RLS issues
+  // Admin client for tasks where the user-scoped RLS would block us even
+  // though access was already established via the authenticated `calls`
+  // lookup above (nested RLS on help responses, signed URL for shared calls).
   const admin = createAdmin();
   const helpRequestIds = (helpRequests ?? []).map((h: { id: string }) => h.id);
   let helpResponses: Record<string, unknown>[] = [];
@@ -61,10 +63,12 @@ export async function GET(
     responsesByRequest.get(key)!.push(r);
   }
 
-  // Get signed audio URL
+  // Get signed audio URL via admin — user access is already enforced by the
+  // calls RLS check above; the call-recordings bucket's SELECT policy may not
+  // include shared users, which would otherwise silently return a null URL.
   let audioUrl: string | null = null;
   if (call.audio_storage_path) {
-    const { data: signedData } = await supabase.storage
+    const { data: signedData } = await admin.storage
       .from("call-recordings")
       .createSignedUrl(call.audio_storage_path, 3600);
     audioUrl = signedData?.signedUrl ?? null;
