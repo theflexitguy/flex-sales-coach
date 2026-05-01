@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdmin } from "@flex/supabase/admin";
 import { isInternalCall } from "@/lib/api-auth-server";
+import { durationFromTranscriptUtterances } from "@/lib/call-duration";
 
 export async function POST(request: Request) {
   if (!isInternalCall(request)) {
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
     // Get audio URL
     const { data: call } = await supabase
       .from("calls")
-      .select("audio_storage_path")
+      .select("audio_storage_path, duration_seconds")
       .eq("id", callId)
       .single();
 
@@ -131,6 +132,8 @@ export async function POST(request: Request) {
       text: u.transcript,
       confidence: u.confidence,
     }));
+    const transcriptDurationSeconds =
+      durationFromTranscriptUtterances(mappedUtterances);
 
     const fullText = mappedUtterances
       .map((u: { speaker: string; text: string }) => `[${u.speaker}] ${u.text}`)
@@ -144,11 +147,16 @@ export async function POST(request: Request) {
       deepgram_request_id: requestId,
     });
 
-    // Update call status
-    await supabase
-      .from("calls")
-      .update({ status: "transcribed" })
-      .eq("id", callId);
+    const update: Record<string, unknown> = { status: "transcribed" };
+    if (
+      transcriptDurationSeconds != null &&
+      (!call.duration_seconds || call.duration_seconds <= 0)
+    ) {
+      update.duration_seconds = transcriptDurationSeconds;
+    }
+
+    // Update call status and repair missing upload duration metadata.
+    await supabase.from("calls").update(update).eq("id", callId);
 
     return NextResponse.json({ success: true, callId });
   } catch (error: unknown) {

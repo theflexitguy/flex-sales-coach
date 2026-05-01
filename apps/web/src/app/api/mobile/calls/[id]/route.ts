@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { durationFromTranscriptUtterances } from "@/lib/call-duration";
 
 export async function GET(
   request: Request,
@@ -95,7 +96,10 @@ export async function GET(
     call: {
       id: call.id,
       customerName: call.customer_name,
-      durationSeconds: call.duration_seconds,
+      durationSeconds:
+        call.duration_seconds && call.duration_seconds > 0
+          ? call.duration_seconds
+          : durationFromTranscriptUtterances(transcript?.utterances) ?? 0,
       status: call.status,
       recordedAt: call.recorded_at,
       audioUrl,

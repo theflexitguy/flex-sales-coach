@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getInternalSecret } from "@/lib/api-auth-server";
+import { probeAudioDurationSeconds } from "@/lib/call-duration";
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
   const audioFile = formData.get("audio") as File | null;
   const customerName = formData.get("customerName") as string | null;
   const customerAddress = formData.get("customerAddress") as string | null;
-  const durationSeconds = parseInt(
+  const submittedDurationSeconds = Number.parseInt(
     (formData.get("durationSeconds") as string) ?? "0",
     10
   );
@@ -63,13 +64,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Audio file required" }, { status: 400 });
   }
 
+  const audioBuffer = Buffer.from(await audioFile.arrayBuffer());
+  const durationSeconds =
+    Number.isFinite(submittedDurationSeconds) && submittedDurationSeconds > 0
+      ? submittedDurationSeconds
+      : probeAudioDurationSeconds(audioBuffer, audioFile.name) ?? 0;
+
   // Upload to Supabase Storage
   const timestamp = Date.now();
   const storagePath = `${user.id}/${timestamp}_${audioFile.name}`;
 
   const { error: uploadError } = await supabase.storage
     .from("call-recordings")
-    .upload(storagePath, audioFile, {
+    .upload(storagePath, audioBuffer, {
       contentType: audioFile.type,
       upsert: false,
     });

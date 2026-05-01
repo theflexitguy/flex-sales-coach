@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
+import { durationFromTranscriptUtterances } from "@/lib/call-duration";
 
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request);
@@ -43,6 +44,24 @@ export async function GET(request: Request) {
     for (const p of profiles ?? []) repNameMap[p.id] = p.full_name;
   }
 
+  const durationByCallId = new Map<string, number>();
+  const missingDurationCallIds = (calls ?? [])
+    .filter((c) => !c.duration_seconds || c.duration_seconds <= 0)
+    .map((c) => c.id);
+  if (missingDurationCallIds.length > 0) {
+    const { data: transcripts } = await supabase
+      .from("transcripts")
+      .select("call_id, utterances")
+      .in("call_id", missingDurationCallIds);
+
+    for (const transcript of transcripts ?? []) {
+      const duration = durationFromTranscriptUtterances(transcript.utterances);
+      if (duration != null) {
+        durationByCallId.set(transcript.call_id, duration);
+      }
+    }
+  }
+
   // Enrich with analysis scores + rep name
   const enriched = await Promise.all(
     (calls ?? []).map(async (call) => {
@@ -61,7 +80,10 @@ export async function GET(request: Request) {
         customerName: call.customer_name,
         repName: repNameMap[call.rep_id] ?? null,
         repId: call.rep_id,
-        durationSeconds: call.duration_seconds,
+        durationSeconds:
+          call.duration_seconds && call.duration_seconds > 0
+            ? call.duration_seconds
+            : durationByCallId.get(call.id) ?? 0,
         status: call.status,
         recordedAt: call.recorded_at,
         sessionId: call.session_id,
