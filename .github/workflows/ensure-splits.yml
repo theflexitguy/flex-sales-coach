@@ -1,0 +1,19 @@
+name: Ensure recording splits
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ensure-splits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke recovery endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail --show-error --silent \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            https://flex-sales-coach-web.vercel.app/api/cron/ensure-splits
