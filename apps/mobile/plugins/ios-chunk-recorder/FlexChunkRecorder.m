@@ -27,6 +27,7 @@ extern void RCTRegisterModule(Class);
 static NSString *const kEventChunkFinalized = @"chunkFinalized";
 static NSString *const kEventRecorderStatus = @"recorderStatus";
 static NSString *const kEventRecorderError = @"recorderError";
+static NSString *const kPendingChunksFileName = @"flex-native-chunks.json";
 
 @interface FlexChunkRecorder : RCTEventEmitter <AVAudioRecorderDelegate>
 @property(nonatomic, strong, nullable) AVAudioRecorder *recorder;
@@ -41,6 +42,11 @@ static NSString *const kEventRecorderError = @"recorderError";
 // times but only 2 chunks landed" vs "rotation stopped firing at 2".
 @property(nonatomic, assign) NSInteger rotationAttemptCount;
 @property(nonatomic, assign) NSInteger rotationSuccessCount;
+// Serialises rotate entries so an interruption-triggered rotate cannot
+// race the DispatchSourceTimer. Without this, both can read the same
+// `chunkIndex` and build two recorders for the same nextIndex, producing
+// duplicate `chunkFinalized` events for the same chunk.
+@property(nonatomic, assign) BOOL isRotating;
 @end
 
 @implementation FlexChunkRecorder
@@ -112,6 +118,49 @@ RCT_EXPORT_MODULE()
       stringByAppendingPathComponent:[NSString
                                          stringWithFormat:@"%ld.m4a",
                                                           (long)index]];
+}
+
+- (NSString *)pendingChunksFilePath {
+  NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
+      NSApplicationSupportDirectory, NSUserDomainMask, YES);
+  NSString *dir = paths.firstObject;
+  [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  return [dir stringByAppendingPathComponent:kPendingChunksFileName];
+}
+
+- (NSArray *)loadPendingChunksFromDisk {
+  NSData *data = [NSData dataWithContentsOfFile:[self pendingChunksFilePath]];
+  if (!data) return @[];
+  NSError *err = nil;
+  id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+  if (err || ![obj isKindOfClass:[NSArray class]]) return @[];
+  return obj;
+}
+
+- (void)persistPendingChunks:(NSArray *)chunks {
+  NSError *err = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:chunks
+                                                 options:0
+                                                   error:&err];
+  if (err || !data) return;
+  [data writeToFile:[self pendingChunksFilePath] atomically:YES];
+}
+
+- (void)queueChunkFinalizedPayload:(NSDictionary *)payload {
+  NSMutableArray *pending = [[self loadPendingChunksFromDisk] mutableCopy];
+  [pending addObject:payload];
+  [self persistPendingChunks:pending];
+}
+
+- (void)emitOrPersistChunkFinalized:(NSDictionary *)payload {
+  if (self.hasListeners) {
+    [self sendEventWithName:kEventChunkFinalized body:payload];
+  } else {
+    [self queueChunkFinalizedPayload:payload];
+  }
 }
 
 #pragma mark - Session / recorder
@@ -228,12 +277,22 @@ static const int64_t kRotationRetryNsec = 500 * NSEC_PER_MSEC;
   // DispatchSourceTimer fires on its own queue. Hop to main for
   // UIApplication + to serialise all rotation work on one thread.
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.isRotating) {
+      // A rotation is already in flight on the main queue — the timer
+      // fired again, or an interruption-ended callback arrived. Drop
+      // this duplicate; the in-flight rotation will finish cleanly.
+      return;
+    }
+    self.isRotating = YES;
     [self rotateChunkAttempt:0];
   });
 }
 
 - (void)rotateChunkAttempt:(NSInteger)attempt {
-  if (!self.sessionId) return;
+  if (!self.sessionId) {
+    self.isRotating = NO;
+    return;
+  }
 
   self.rotationAttemptCount += 1;
 
@@ -290,11 +349,15 @@ static const int64_t kRotationRetryNsec = 500 * NSEC_PER_MSEC;
       [[UIApplication sharedApplication] endBackgroundTask:bgTask];
     }
     if (attempt < kMaxRotationRetries) {
+      // Keep isRotating=YES across the retry — a duplicate rotateChunk
+      // during this window must not enter a parallel attempt.
       dispatch_after(
           dispatch_time(DISPATCH_TIME_NOW, kRotationRetryNsec),
           dispatch_get_main_queue(), ^{
             [self rotateChunkAttempt:attempt + 1];
           });
+    } else {
+      self.isRotating = NO;
     }
     return;
   }
@@ -315,21 +378,21 @@ static const int64_t kRotationRetryNsec = 500 * NSEC_PER_MSEC;
   self.chunkStartedAt = [[NSDate date] timeIntervalSince1970];
   self.rotationSuccessCount += 1;
 
-  if (finalizedPath && self.hasListeners) {
-    [self sendEventWithName:kEventChunkFinalized
-                       body:@{
-                         @"sessionId" : self.sessionId ?: @"",
-                         @"chunkIndex" : @(finalizedIndex),
-                         @"filePath" : finalizedPath,
-                         @"durationSeconds" : @(durationSec),
-                         @"rotationAttempts" : @(self.rotationAttemptCount),
-                         @"rotationSuccesses" : @(self.rotationSuccessCount),
-                       }];
+  if (finalizedPath) {
+    [self emitOrPersistChunkFinalized:@{
+      @"sessionId" : self.sessionId ?: @"",
+      @"chunkIndex" : @(finalizedIndex),
+      @"filePath" : finalizedPath,
+      @"durationSeconds" : @(durationSec),
+      @"rotationAttempts" : @(self.rotationAttemptCount),
+      @"rotationSuccesses" : @(self.rotationSuccessCount),
+    }];
   }
 
   if (bgTask != UIBackgroundTaskInvalid) {
     [[UIApplication sharedApplication] endBackgroundTask:bgTask];
   }
+  self.isRotating = NO;
 }
 
 - (void)startRotateTimer {
@@ -408,7 +471,8 @@ static const int64_t kRotationRetryNsec = 500 * NSEC_PER_MSEC;
 
 RCT_EXPORT_METHOD(startSession
                   : (NSString *)sessionId chunkDurationSeconds
-                  : (nonnull NSNumber *)chunkDurationSeconds resolver
+                  : (nonnull NSNumber *)chunkDurationSeconds startChunkIndex
+                  : (nonnull NSNumber *)startChunkIndex resolver
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject) {
   if (self.sessionId) {
@@ -416,7 +480,7 @@ RCT_EXPORT_METHOD(startSession
     return;
   }
   self.sessionId = sessionId;
-  self.chunkIndex = 0;
+  self.chunkIndex = MAX(0, [startChunkIndex integerValue]);
   self.chunkDurationSeconds = [chunkDurationSeconds doubleValue];
   if (self.chunkDurationSeconds < 5) {
     self.chunkDurationSeconds = 5;
@@ -441,6 +505,7 @@ RCT_EXPORT_METHOD(startSession
 
   self.rotationAttemptCount = 0;
   self.rotationSuccessCount = 0;
+  self.isRotating = NO;
   [self startRotateTimer];
   resolve(@{@"ok" : @YES});
 }
@@ -453,6 +518,7 @@ RCT_EXPORT_METHOD(stopSession
     return;
   }
   [self stopRotateTimer];
+  self.isRotating = NO;
 
   AVAudioRecorder *current = self.recorder;
   NSInteger finalIndex = self.chunkIndex;
@@ -465,15 +531,14 @@ RCT_EXPORT_METHOD(stopSession
   }
   self.recorder = nil;
 
-  if (finalPath && self.hasListeners) {
-    [self sendEventWithName:kEventChunkFinalized
-                       body:@{
-                         @"sessionId" : self.sessionId ?: @"",
-                         @"chunkIndex" : @(finalIndex),
-                         @"filePath" : finalPath,
-                         @"durationSeconds" : @(durationSec),
-                         @"final" : @YES,
-                       }];
+  if (finalPath) {
+    [self emitOrPersistChunkFinalized:@{
+      @"sessionId" : self.sessionId ?: @"",
+      @"chunkIndex" : @(finalIndex),
+      @"filePath" : finalPath,
+      @"durationSeconds" : @(durationSec),
+      @"final" : @YES,
+    }];
   }
 
   self.sessionId = nil;
@@ -484,6 +549,14 @@ RCT_EXPORT_METHOD(stopSession
       withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
             error:&err];
   resolve(@{@"finalIndex" : @(finalIndex)});
+}
+
+RCT_EXPORT_METHOD(drainFinalizedChunks
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject) {
+  NSArray *pending = [self loadPendingChunksFromDisk];
+  [self persistPendingChunks:@[]];
+  resolve(pending ?: @[]);
 }
 
 RCT_EXPORT_METHOD(getStatus

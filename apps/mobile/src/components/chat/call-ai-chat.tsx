@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, KeyboardAvoidingView, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { apiGet } from "../../services/api";
-import { API_BASE_URL } from "../../constants/recording";
+import { apiUrl } from "../../constants/recording";
 import { supabase } from "../../lib/supabase";
 import { haptic } from "../../lib/haptics";
 
@@ -108,7 +108,7 @@ export function CallAIChat({ callId }: { callId: string }) {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${API_BASE_URL}/api/calls/${callId}/chat`, {
+      const res = await fetch(apiUrl(`/api/calls/${callId}/chat`), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
         body: JSON.stringify({ message: msg }),

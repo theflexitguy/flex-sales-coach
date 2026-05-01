@@ -22,11 +22,15 @@ const config: ExpoConfig = {
       ? "com.flexpestcontrol.salescoach.dev"
       : "com.flexpestcontrol.salescoach",
     infoPlist: {
-      UIBackgroundModes: ["audio"],
+      UIBackgroundModes: ["audio", "location"],
       NSMicrophoneUsageDescription:
         "Flex Sales Coach records your sales conversations for AI-powered coaching analysis.",
       NSLocationWhenInUseUsageDescription:
-        "Flex Sales Coach uses your location to tag where each sales conversation happens.",
+        "Koachr uses your location while recording to separate door-to-door conversations and tag where they happened.",
+      NSLocationAlwaysAndWhenInUseUsageDescription:
+        "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
+      NSLocationAlwaysUsageDescription:
+        "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
       ITSAppUsesNonExemptEncryption: false,
     },
     buildNumber: "29",
@@ -64,6 +68,10 @@ const config: ExpoConfig = {
     // when the app is suspended or killed. Without this, JS-driven
     // uploads freeze when iOS suspends the app after backgrounding.
     "./plugins/with-flex-background-uploader",
+    // Native CLLocationManager sampler. JS timers are throttled in the
+    // background, but native location updates continue while the app is
+    // recording so conversation splitting can use movement between homes.
+    "./plugins/with-flex-background-location",
     // Native AVAudioRecorder + DispatchSourceTimer chunk rotator.
     // Native timers fire reliably when the app is deep-backgrounded;
     // JS setInterval gets throttled hard. Prevents multi-hour sessions

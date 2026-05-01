@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdmin } from "@flex/supabase/admin";
+import { getInternalSecret } from "@/lib/api-auth-server";
+import { reconcileSessionChunks } from "@/lib/session-chunk-reconcile";
 
 // Cron sweep — runs every 5 min via vercel.json and recovers stuck
 // sessions across ALL reps. This is the platform-level safety net:
@@ -13,7 +15,9 @@ import { createAdmin } from "@flex/supabase/admin";
 export const maxDuration = 60;
 
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
-const PROCESSING_STALE_MS = 3 * 60 * 1000;
+// Must exceed split maxDuration (300s) + headroom; otherwise cron retriggers
+// a still-running split and produces duplicate calls.
+const PROCESSING_STALE_MS = 6 * 60 * 1000;
 const FAILED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const SCAN_LOOKBACK_MS = 7 * 24 * 3600 * 1000;
 
@@ -28,8 +32,8 @@ function isAuthorized(request: Request): boolean {
   if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true;
 
   const internalSecret = request.headers.get("x-internal-secret");
-  const expected = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
-  if (internalSecret === expected) return true;
+  const expected = process.env.INTERNAL_API_SECRET;
+  if (expected && expected.length >= 16 && internalSecret === expected) return true;
 
   return false;
 }
@@ -61,13 +65,22 @@ export async function GET(request: Request) {
   }
 
   const origin = new URL(request.url).origin;
-  const internalSecret = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
+  const internalSecret = getInternalSecret();
   const recovered: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
 
   for (const s of sessions) {
     const stoppedAt = s.stopped_at ? new Date(s.stopped_at).getTime() : null;
     const heartbeat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
+
+    try {
+      await reconcileSessionChunks(admin, s.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      skipped.push({ id: s.id, reason: `reconcile_error: ${message}` });
+      log(500, "reconcile_error", { sessionId: s.id, repId: s.rep_id, message });
+      continue;
+    }
 
     const { count: chunkCount } = await admin
       .from("session_chunks")

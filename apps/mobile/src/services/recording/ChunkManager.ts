@@ -13,7 +13,7 @@ import {
   type ChunkFinalizedEvent,
   type RecorderStatusEvent,
 } from "./NativeChunkRecorder";
-import { CHUNK_DURATION_MS, API_BASE_URL } from "../../constants/recording";
+import { CHUNK_DURATION_MS, apiUrl } from "../../constants/recording";
 import { getCurrentLocation } from "../location";
 import { supabase } from "../../lib/supabase";
 
@@ -133,7 +133,7 @@ export class ChunkManager {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) return;
-      await fetch(`${API_BASE_URL}/api/sessions/heartbeat`, {
+      await fetch(apiUrl("/api/sessions/heartbeat"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -147,9 +147,9 @@ export class ChunkManager {
     }
   }
 
-  async startSession(sessionId: string): Promise<void> {
+  async startSession(sessionId: string, startChunkIndex = 0): Promise<void> {
     this.sessionId = sessionId;
-    this.chunkIndex = 0;
+    this.chunkIndex = Math.max(0, startChunkIndex);
     this.consecutiveMissedChecks = 0;
     this.setHealth("recording");
 
@@ -158,7 +158,7 @@ export class ChunkManager {
       // rotation. JS just listens for chunkFinalized events and
       // enqueues uploads. Skip the watchdog + JS rotation entirely —
       // they're obsolete when native runs the show.
-      await this.startNativeSession(sessionId);
+      await this.startNativeSession(sessionId, this.chunkIndex);
       locationTracker.start(sessionId);
       this.sendHeartbeat(sessionId);
       this.heartbeat = setInterval(() => {
@@ -461,12 +461,21 @@ export class ChunkManager {
    * rotation and interruption recovery internally; JS is just an
    * observer that feeds the upload pipeline.
    */
-  private async startNativeSession(sessionId: string): Promise<void> {
+  private async startNativeSession(
+    sessionId: string,
+    startChunkIndex: number
+  ): Promise<void> {
     this.usingNativeRecorder = true;
 
     this.nativeSubs.push(
       nativeChunkRecorder.onChunkFinalized(async (evt: ChunkFinalizedEvent) => {
-        if (this.sessionId !== evt.sessionId) return;
+        // Final-chunk events are emitted by native `stopSession` right
+        // before our JS-side `stopSession` clears `this.sessionId` — the
+        // RN event bus delivers them asynchronously, so by the time this
+        // handler runs `this.sessionId` is often already null. Trust
+        // `evt.sessionId` for terminal events; drop only stale mid-session
+        // events from a previous recording.
+        if (!evt.final && this.sessionId !== evt.sessionId) return;
         const coords = await getCurrentLocation();
         uploadQueue.enqueue({
           sessionId: evt.sessionId,
@@ -527,8 +536,32 @@ export class ChunkManager {
 
     await nativeChunkRecorder.startSession(
       sessionId,
-      Math.round(CHUNK_DURATION_MS / 1000)
+      Math.round(CHUNK_DURATION_MS / 1000),
+      startChunkIndex
     );
+  }
+
+  async drainNativeFinalizedChunks(): Promise<void> {
+    if (!nativeChunkRecorder.isAvailable()) return;
+    const events = await nativeChunkRecorder.drainFinalizedChunks();
+    for (const evt of events) {
+      if (!evt.sessionId || evt.chunkIndex == null || !evt.filePath) continue;
+      const coords = await getCurrentLocation();
+      uploadQueue.enqueue({
+        sessionId: evt.sessionId,
+        chunkIndex: evt.chunkIndex,
+        uri: `file://${evt.filePath}`,
+        durationSeconds: Math.round(evt.durationSeconds),
+        latitude: coords?.latitude ?? null,
+        longitude: coords?.longitude ?? null,
+      });
+      this.onChunkComplete?.(evt.chunkIndex);
+      uploadQueue.recordRecorderEvent(
+        evt.sessionId,
+        evt.chunkIndex,
+        `recovered native finalized chunk ${evt.chunkIndex} from disk`
+      );
+    }
   }
 
   getChunkIndex(): number {

@@ -124,8 +124,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  // Create chunk record
-  await admin.from("session_chunks").upsert(
+  // Create chunk record. Silently ignoring the upsert error used to let the
+  // client believe a chunk was registered when a DB/network hiccup had
+  // actually dropped it — sessions ended with missing chunks and no signal.
+  const { error: upsertError } = await admin.from("session_chunks").upsert(
     {
       session_id: sessionId,
       chunk_index: chunkIndex,
@@ -136,23 +138,62 @@ export async function POST(request: Request) {
     },
     { onConflict: "session_id,chunk_index" }
   );
+  if (upsertError) {
+    logChunk(500, "chunk_upsert_failed", {
+      userId: auth.user.id,
+      sessionId,
+      chunkIndex,
+      storagePath,
+      supabaseError: upsertError.message,
+    });
+    return NextResponse.json(
+      { error: `Failed to register chunk: ${upsertError.message}` },
+      { status: 500 }
+    );
+  }
 
   // Update session counters
-  const { data: chunks } = await admin
+  const { data: chunks, error: chunksError } = await admin
     .from("session_chunks")
     .select("duration_seconds")
     .eq("session_id", sessionId);
+  if (chunksError) {
+    logChunk(500, "chunk_counter_select_failed", {
+      userId: auth.user.id,
+      sessionId,
+      chunkIndex,
+      storagePath,
+      supabaseError: chunksError.message,
+    });
+    return NextResponse.json(
+      { error: `Failed to read chunk counters: ${chunksError.message}` },
+      { status: 500 }
+    );
+  }
 
   const totalChunks = chunks?.length ?? 0;
   const totalDuration = (chunks ?? []).reduce((sum, c) => sum + (c.duration_seconds ?? 0), 0);
 
-  await admin
+  const { error: sessionUpdateError } = await admin
     .from("recording_sessions")
     .update({
       chunk_count: totalChunks,
       total_duration_s: totalDuration,
     })
     .eq("id", sessionId);
+  if (sessionUpdateError) {
+    logChunk(500, "session_counter_update_failed", {
+      userId: auth.user.id,
+      sessionId,
+      chunkIndex,
+      storagePath,
+      supabaseError: sessionUpdateError.message,
+    });
+    return NextResponse.json(
+      { error: `Failed to update session counters: ${sessionUpdateError.message}` },
+      { status: 500 }
+    );
+  }
 
   // Transcribe this chunk out-of-band. Phase 4: by the time the session
   // is stopped and split runs, most chunks already have transcripts and

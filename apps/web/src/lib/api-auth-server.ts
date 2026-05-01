@@ -33,8 +33,22 @@ export async function requireApiAuth(request?: Request) {
 
 /**
  * Internal API secret for server-to-server calls (transcribe, analyze, split).
+ * Missing env var is a hard failure — a predictable fallback would let any
+ * anonymous caller who knows the string trigger /split, /recover, etc.
  */
+export function getInternalSecret(): string {
+  const secret = process.env.INTERNAL_API_SECRET;
+  if (!secret || secret.length < 16) {
+    throw new Error(
+      "INTERNAL_API_SECRET is missing or too short. Set a 32+ char random value in Vercel env."
+    );
+  }
+  return secret;
+}
+
 export function isInternalCall(request: Request): boolean {
-  const secret = request.headers.get("x-internal-secret");
-  return secret === (process.env.INTERNAL_API_SECRET || "flex-internal-2024");
+  const expected = process.env.INTERNAL_API_SECRET;
+  if (!expected || expected.length < 16) return false;
+  const got = request.headers.get("x-internal-secret");
+  return got === expected;
 }

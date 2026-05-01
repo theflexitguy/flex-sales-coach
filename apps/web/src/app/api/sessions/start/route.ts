@@ -30,10 +30,21 @@ export async function POST(request: Request) {
     .in("status", ["recording", "uploading"]);
 
   if (existingSessions && existingSessions.length > 0) {
-    log(200, "resumed", { userId: auth.user.id, sessionId: existingSessions[0].id });
+    const sessionId = existingSessions[0].id;
+    const { data: latestChunk } = await admin
+      .from("session_chunks")
+      .select("chunk_index")
+      .eq("session_id", sessionId)
+      .order("chunk_index", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextChunkIndex =
+      latestChunk?.chunk_index != null ? latestChunk.chunk_index + 1 : 0;
+    log(200, "resumed", { userId: auth.user.id, sessionId, nextChunkIndex });
     return NextResponse.json({
-      sessionId: existingSessions[0].id,
+      sessionId,
       resumed: true,
+      nextChunkIndex,
     });
   }
 
@@ -61,5 +72,5 @@ export async function POST(request: Request) {
   }
 
   log(200, "created", { userId: auth.user.id, sessionId: session.id });
-  return NextResponse.json({ sessionId: session.id, resumed: false });
+  return NextResponse.json({ sessionId: session.id, resumed: false, nextChunkIndex: 0 });
 }

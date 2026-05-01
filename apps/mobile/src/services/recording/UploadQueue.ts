@@ -1,7 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import * as FileSystem from "expo-file-system/legacy";
-import { API_BASE_URL } from "../../constants/recording";
+import {
+  API_BASE_URL,
+  API_BASE_URL_STATUS,
+  apiUrl,
+} from "../../constants/recording";
 import { supabase } from "../../lib/supabase";
 import {
   nativeBackgroundUploader,
@@ -25,9 +29,15 @@ interface ChunkUploadJob {
   storagePath?: string;
 }
 
-interface PendingComplete {
+export interface PendingComplete {
   sessionId: string;
   label: string;
+  attempts?: number;
+  firstAttemptAt?: number;
+  nextAttemptAt?: number;
+  lastStatus?: number;
+  lastError?: string;
+  failedAt?: number;
 }
 
 export interface UploadErrorRecord {
@@ -35,12 +45,21 @@ export interface UploadErrorRecord {
   sessionId: string;
   chunkIndex: number;
   retries: number;
-  stage: "auth" | "storage" | "metadata" | "recorder" | "unknown";
+  stage:
+    | "auth"
+    | "storage"
+    | "metadata"
+    | "recorder"
+    | "complete"
+    | "config"
+    | "unknown";
   message: string;
 }
 
 export interface UploadDiagnostics {
   apiBaseUrl: string;
+  apiBaseUrlValid: boolean;
+  apiBaseUrlError: string | null;
   queueSize: number;
   uploadedCount: number;
   pendingCompletes: PendingComplete[];
@@ -59,6 +78,12 @@ const ERRORS_KEY = "flex_upload_errors";
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 const ERROR_RING_SIZE = 20;
+// Poll interval for stuck /complete posts. If the last chunk drained but
+// the /api/sessions/complete fetch failed (expired token, flaky network),
+// nothing else in the queue will trigger another attempt — this timer
+// does.
+const COMPLETE_RETRY_MS = 15000;
+const COMPLETE_MAX_RETRY_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 class UploadQueue {
   private queue: ChunkUploadJob[] = [];
@@ -72,6 +97,8 @@ class UploadQueue {
   private lastError: string | null = null;
   private errors: UploadErrorRecord[] = [];
   private alertedForSessions = new Set<string>();
+  private completeRetryTimer: ReturnType<typeof setInterval> | null = null;
+  private completeCheckInFlight = false;
 
   constructor() {
     // Listen for network changes
@@ -79,8 +106,9 @@ class UploadQueue {
       const wasOffline = !this.isOnline;
       this.isOnline = state.isConnected ?? true;
       // Resume processing when coming back online
-      if (wasOffline && this.isOnline && this.queue.length > 0) {
-        this.processNext();
+      if (wasOffline && this.isOnline) {
+        if (this.queue.length > 0) this.processNext();
+        if (this.pendingCompletes.length > 0) this.checkSessionCompletes();
       }
     });
 
@@ -139,6 +167,8 @@ class UploadQueue {
     }
     return {
       apiBaseUrl: API_BASE_URL,
+      apiBaseUrlValid: API_BASE_URL_STATUS.valid,
+      apiBaseUrlError: API_BASE_URL_STATUS.error,
       queueSize: this.queue.length,
       uploadedCount: this.uploadedCount,
       pendingCompletes: [...this.pendingCompletes],
@@ -202,6 +232,8 @@ class UploadQueue {
         this.errors = JSON.parse(errors);
       }
 
+      await this.syncNativeUploaderState();
+
       // Drop jobs whose underlying files no longer exist. iOS Caches is
       // purgeable — after an app restart or update the m4a may be gone.
       // Retrying forever spams the UI with a scary "chunk file missing"
@@ -244,12 +276,28 @@ class UploadQueue {
         // Any pending completes may now be unblocked since we dropped dead chunks
         this.checkSessionCompletes();
       }
+      // Start the standalone retry timer if we restored unfinished completes.
+      this.updateCompleteRetryTimer();
     } catch {
       // ignore
     }
   }
 
   enqueue(job: Omit<ChunkUploadJob, "retries">): void {
+    const existing = this.queue.find(
+      (j) => j.sessionId === job.sessionId && j.chunkIndex === job.chunkIndex
+    );
+    if (existing) {
+      existing.uri = job.uri;
+      existing.durationSeconds = job.durationSeconds;
+      existing.latitude = job.latitude;
+      existing.longitude = job.longitude;
+      existing.storagePath = job.storagePath ?? existing.storagePath;
+      this.persist();
+      this.emitStatus();
+      this.processNext();
+      return;
+    }
     this.queue.push({ ...job, retries: 0 });
     this.persist();
     this.emitStatus();
@@ -261,19 +309,44 @@ class UploadQueue {
    * This replaces the old waitForDrain() approach — the UI is never blocked.
    */
   registerSessionComplete(sessionId: string, label: string): void {
-    this.pendingCompletes.push({ sessionId, label });
+    const existing = this.pendingCompletes.find((p) => p.sessionId === sessionId);
+    if (existing) {
+      existing.label = label;
+      existing.failedAt = undefined;
+      existing.lastError = undefined;
+      existing.lastStatus = undefined;
+      existing.nextAttemptAt = undefined;
+      existing.firstAttemptAt = undefined;
+      existing.attempts = 0;
+    } else {
+      this.pendingCompletes.push({ sessionId, label });
+    }
     this.persistCompletes();
+    this.updateCompleteRetryTimer();
     // Check immediately in case queue is already drained for this session
     this.checkSessionCompletes();
   }
 
   private async checkSessionCompletes(): Promise<void> {
+    if (this.completeCheckInFlight || !this.isOnline) return;
+    this.completeCheckInFlight = true;
+
+    try {
+      await this.checkSessionCompletesOnce();
+    } finally {
+      this.completeCheckInFlight = false;
+    }
+  }
+
+  private async checkSessionCompletesOnce(): Promise<void> {
     const remaining = [...this.pendingCompletes];
     const fulfilled: PendingComplete[] = [];
+    const now = Date.now();
 
     for (const pc of remaining) {
       const hasChunks = this.queue.some((j) => j.sessionId === pc.sessionId);
-      if (!hasChunks && !this.processing) {
+      const retryReady = !pc.nextAttemptAt || pc.nextAttemptAt <= now;
+      if (!hasChunks && retryReady && !pc.failedAt) {
         fulfilled.push(pc);
       }
     }
@@ -281,26 +354,114 @@ class UploadQueue {
     for (const pc of fulfilled) {
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session?.access_token) {
-          await fetch(`${API_BASE_URL}/api/sessions/complete`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({ sessionId: pc.sessionId, label: pc.label }),
-          });
+        if (!session?.access_token) {
+          await this.scheduleCompleteRetry(pc, "No auth session", null);
+          continue;
         }
-      } catch {
-        // Will retry on next drain check
-        continue;
+
+        const res = await fetch(apiUrl("/api/sessions/complete"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ sessionId: pc.sessionId, label: pc.label }),
+        });
+
+        if (res.ok) {
+          this.pendingCompletes = this.pendingCompletes.filter(
+            (p) => p.sessionId !== pc.sessionId
+          );
+          await this.persistCompletes();
+        } else {
+          const text = await res.text().catch(() => "");
+          await this.scheduleCompleteRetry(
+            pc,
+            `complete POST ${res.status}: ${text.slice(0, 240) || res.statusText}`,
+            res.status
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "unknown";
+        await this.scheduleCompleteRetry(
+          pc,
+          `complete POST exception: ${message}`,
+          null
+        );
       }
-      this.pendingCompletes = this.pendingCompletes.filter(
-        (p) => p.sessionId !== pc.sessionId
-      );
     }
 
-    this.persistCompletes();
+    await this.persistCompletes();
+    this.updateCompleteRetryTimer();
+  }
+
+  private async scheduleCompleteRetry(
+    pc: PendingComplete,
+    message: string,
+    status: number | null
+  ): Promise<void> {
+    const now = Date.now();
+    pc.firstAttemptAt ??= now;
+    pc.attempts = (pc.attempts ?? 0) + 1;
+    pc.lastStatus = status ?? undefined;
+    pc.lastError = message;
+
+    if (now - pc.firstAttemptAt >= COMPLETE_MAX_RETRY_WINDOW_MS) {
+      pc.failedAt = now;
+      pc.nextAttemptAt = undefined;
+      this.recordUploadEvent({
+        at: now,
+        sessionId: pc.sessionId,
+        chunkIndex: -1,
+        retries: pc.attempts,
+        stage: "complete",
+        message: `${message}; giving up after ${Math.round(
+          COMPLETE_MAX_RETRY_WINDOW_MS / 60000
+        )} minutes`,
+      });
+      await this.persistCompletes();
+      return;
+    }
+
+    const delay = Math.min(
+      BASE_DELAY_MS * Math.pow(2, pc.attempts),
+      5 * 60 * 1000
+    );
+    pc.nextAttemptAt = now + delay;
+    this.recordUploadEvent({
+      at: now,
+      sessionId: pc.sessionId,
+      chunkIndex: -1,
+      retries: pc.attempts,
+      stage: API_BASE_URL_STATUS.valid ? "complete" : "config",
+      message: `${message}; will retry`,
+    });
+    await this.persistCompletes();
+  }
+
+  private recordUploadEvent(record: UploadErrorRecord): void {
+    this.lastError = record.message;
+    this.errors.unshift(record);
+    if (this.errors.length > ERROR_RING_SIZE) {
+      this.errors.length = ERROR_RING_SIZE;
+    }
+    this.persistErrors().catch(() => {
+      // best-effort — diagnostics persistence isn't critical
+    });
+  }
+
+  private updateCompleteRetryTimer(): void {
+    const shouldRun = this.pendingCompletes.some((pc) => !pc.failedAt);
+    if (shouldRun && !this.completeRetryTimer) {
+      this.completeRetryTimer = setInterval(() => {
+        this.checkSessionCompletes().catch(() => {
+          // swallow; next tick retries
+        });
+      }, COMPLETE_RETRY_MS);
+    } else if (!shouldRun && this.completeRetryTimer) {
+      clearInterval(this.completeRetryTimer);
+      this.completeRetryTimer = null;
+    }
   }
 
   private async processNext(): Promise<void> {
@@ -346,6 +507,54 @@ class UploadQueue {
       this.processNext();
     } else if (this.queue.length === 0) {
       this.checkSessionCompletes();
+    }
+  }
+
+  private async syncNativeUploaderState(): Promise<void> {
+    if (!nativeBackgroundUploader.isAvailable()) return;
+
+    try {
+      const events = await nativeBackgroundUploader.drainEvents();
+      for (const event of events) {
+        if (event.eventName === "uploadCompleted") {
+          await this.handleNativeCompleted(event as UploadCompletedEvent);
+        } else {
+          await this.handleNativeFailed(event as UploadFailedEvent);
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      this.recordRecorderEvent(
+        "unknown",
+        -1,
+        `native uploader drain failed: ${message}`
+      );
+    }
+
+    try {
+      const activeIds = new Set(await nativeBackgroundUploader.getActiveTaskIds());
+      let changed = false;
+      for (const job of this.queue) {
+        if (job.nativeTaskId != null && !activeIds.has(job.nativeTaskId)) {
+          this.recordRecorderEvent(
+            job.sessionId,
+            job.chunkIndex,
+            `native upload task ${job.nativeTaskId} missing; retrying with fresh signed URL`
+          );
+          job.nativeTaskId = undefined;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.persist();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      this.recordRecorderEvent(
+        "unknown",
+        -1,
+        `native uploader task reconciliation failed: ${message}`
+      );
     }
   }
 
@@ -415,7 +624,7 @@ class UploadQueue {
       throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
     }
 
-    const urlRes = await fetch(`${API_BASE_URL}/api/sessions/chunk/upload-url`, {
+    const urlRes = await fetch(apiUrl("/api/sessions/chunk/upload-url"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${session.access_token}`,
@@ -506,7 +715,7 @@ class UploadQueue {
         throw new UploadStageError("auth", "No auth session at register-time");
       }
 
-      const res = await fetch(`${API_BASE_URL}/api/sessions/chunk`, {
+      const res = await fetch(apiUrl("/api/sessions/chunk"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -563,7 +772,8 @@ class UploadQueue {
       new UploadStageError("storage", event.error || `HTTP ${event.status}`),
       "native-upload"
     );
-    // Kick the queue so retries with a fresh signed URL happen promptly.
+    // Kick the queue so the retry (after backoff) actually dispatches.
+    // handleUploadError only sleeps; it does not itself schedule retry.
     this.processNext();
   }
 
@@ -621,7 +831,7 @@ class UploadQueue {
     const token = freshSession?.access_token ?? session.access_token;
 
     // Step 2: Register the chunk metadata via lightweight API call (no file body)
-    const res = await fetch(`${API_BASE_URL}/api/sessions/chunk`, {
+    const res = await fetch(apiUrl("/api/sessions/chunk"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,

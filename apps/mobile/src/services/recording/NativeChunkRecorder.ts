@@ -14,7 +14,8 @@ import {
 interface FlexChunkRecorderModule {
   startSession(
     sessionId: string,
-    chunkDurationSeconds: number
+    chunkDurationSeconds: number,
+    startChunkIndex: number
   ): Promise<{ ok: boolean }>;
   stopSession(): Promise<{ finalIndex?: number }>;
   getStatus(): Promise<{
@@ -25,6 +26,7 @@ interface FlexChunkRecorderModule {
   }>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
+  drainFinalizedChunks(): Promise<ChunkFinalizedEvent[]>;
 }
 
 export interface ChunkFinalizedEvent {
@@ -64,12 +66,13 @@ export const nativeChunkRecorder = {
 
   async startSession(
     sessionId: string,
-    chunkDurationSeconds: number
+    chunkDurationSeconds: number,
+    startChunkIndex = 0
   ): Promise<void> {
     if (!nativeModule) {
       throw new Error("FlexChunkRecorder native module not available");
     }
-    await nativeModule.startSession(sessionId, chunkDurationSeconds);
+    await nativeModule.startSession(sessionId, chunkDurationSeconds, startChunkIndex);
   },
 
   async stopSession(): Promise<{ finalIndex?: number }> {
@@ -85,6 +88,11 @@ export const nativeChunkRecorder = {
   }> {
     if (!nativeModule) return { isRecording: false };
     return nativeModule.getStatus();
+  },
+
+  async drainFinalizedChunks(): Promise<ChunkFinalizedEvent[]> {
+    if (!nativeModule) return [];
+    return nativeModule.drainFinalizedChunks();
   },
 
   onChunkFinalized(

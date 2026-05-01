@@ -30,6 +30,7 @@ extern void RCTRegisterModule(Class);
 static NSString *const kSessionIdentifier =
     @"com.flexpestcontrol.salescoach.bgupload";
 static NSString *const kMetadataFileName = @"flex-bg-uploads.json";
+static NSString *const kPendingEventsFileName = @"flex-bg-upload-events.json";
 static NSString *const kEventCompleted = @"uploadCompleted";
 static NSString *const kEventFailed = @"uploadFailed";
 
@@ -148,7 +149,8 @@ RCT_EXPORT_METHOD(enqueueUpload
   }
   NSURL *fileURL = [NSURL fileURLWithPath:localFilePath];
   NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-  req.HTTPMethod = @"POST";
+  // Supabase createSignedUploadUrl issues URLs that require PUT.
+  req.HTTPMethod = @"PUT";
   for (NSString *name in headers) {
     id value = headers[name];
     if ([value isKindOfClass:[NSString class]]) {
@@ -191,6 +193,27 @@ RCT_EXPORT_METHOD(getPendingCount
   }];
 }
 
+RCT_EXPORT_METHOD(getActiveTaskIds
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject) {
+  [self.session getAllTasksWithCompletionHandler:^(
+                    NSArray<__kindof NSURLSessionTask *> *tasks) {
+    NSMutableArray *ids = [NSMutableArray arrayWithCapacity:tasks.count];
+    for (NSURLSessionTask *t in tasks) {
+      [ids addObject:@(t.taskIdentifier)];
+    }
+    resolve(ids);
+  }];
+}
+
+RCT_EXPORT_METHOD(drainEvents
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject) {
+  NSArray *pending = [self loadPendingEventsFromDisk];
+  [self persistPendingEvents:@[]];
+  resolve(pending ?: @[]);
+}
+
 #pragma mark - Metadata persistence
 
 - (NSString *)metadataFilePath {
@@ -220,6 +243,48 @@ RCT_EXPORT_METHOD(getPendingCount
                                                    error:&err];
   if (err || !data) return;
   [data writeToFile:[self metadataFilePath] atomically:YES];
+}
+
+- (NSString *)pendingEventsFilePath {
+  NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
+      NSApplicationSupportDirectory, NSUserDomainMask, YES);
+  NSString *dir = paths.firstObject;
+  [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  return [dir stringByAppendingPathComponent:kPendingEventsFileName];
+}
+
+- (NSArray *)loadPendingEventsFromDisk {
+  NSData *data = [NSData dataWithContentsOfFile:[self pendingEventsFilePath]];
+  if (!data) return @[];
+  NSError *err = nil;
+  id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+  if (err || ![obj isKindOfClass:[NSArray class]]) return @[];
+  return obj;
+}
+
+- (void)persistPendingEvents:(NSArray *)events {
+  NSError *err = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:events
+                                                 options:0
+                                                   error:&err];
+  if (err || !data) return;
+  [data writeToFile:[self pendingEventsFilePath] atomically:YES];
+}
+
+- (void)emitOrPersistEvent:(NSString *)eventName payload:(NSDictionary *)payload {
+  if (self.hasListeners) {
+    [self sendEventWithName:eventName body:payload];
+    return;
+  }
+
+  NSMutableDictionary *storedPayload = [payload mutableCopy];
+  storedPayload[@"eventName"] = eventName;
+  NSMutableArray *pending = [[self loadPendingEventsFromDisk] mutableCopy];
+  [pending addObject:storedPayload];
+  [self persistPendingEvents:pending];
 }
 
 #pragma mark - NSURLSession delegate
@@ -257,9 +322,7 @@ RCT_EXPORT_METHOD(getPendingCount
         [NSString stringWithFormat:@"HTTP %ld", (long)status];
   }
 
-  if (self.hasListeners) {
-    [self sendEventWithName:eventName body:payload];
-  }
+  [self emitOrPersistEvent:eventName payload:payload];
 }
 
 - (void)URLSessionDidFinishEventsForBackgroundURLSession:(NSURLSession *)session {

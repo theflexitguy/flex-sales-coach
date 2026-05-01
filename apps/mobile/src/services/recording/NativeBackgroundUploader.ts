@@ -20,6 +20,8 @@ interface FlexBackgroundUploaderModule {
   ): Promise<{ taskId: number }>;
   cancelAll(): Promise<number>;
   getPendingCount(): Promise<number>;
+  getActiveTaskIds(): Promise<number[]>;
+  drainEvents(): Promise<Array<(UploadCompletedEvent | UploadFailedEvent) & { eventName?: string }>>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -73,6 +75,16 @@ export const nativeBackgroundUploader = {
   async getPendingCount(): Promise<number> {
     if (!nativeModule) return 0;
     return nativeModule.getPendingCount();
+  },
+
+  async getActiveTaskIds(): Promise<number[]> {
+    if (!nativeModule) return [];
+    return nativeModule.getActiveTaskIds();
+  },
+
+  async drainEvents(): Promise<Array<(UploadCompletedEvent | UploadFailedEvent) & { eventName?: string }>> {
+    if (!nativeModule) return [];
+    return nativeModule.drainEvents();
   },
 
   onCompleted(listener: (event: UploadCompletedEvent) => void): { remove: () => void } {

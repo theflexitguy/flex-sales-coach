@@ -23,6 +23,14 @@ function formatExpiry(epochSec: number | null): string {
   return `${new Date(ms).toLocaleString()} (${mins >= 0 ? "in " : ""}${mins} min)`;
 }
 
+function formatDelay(ms: number | undefined): string {
+  if (!ms) return "now";
+  const deltaMs = ms - Date.now();
+  if (deltaMs <= 0) return "now";
+  const mins = Math.ceil(deltaMs / 60000);
+  return `${mins} min`;
+}
+
 export default function DiagnosticsScreen() {
   const [diag, setDiag] = useState<UploadDiagnostics | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -77,6 +85,28 @@ export default function DiagnosticsScreen() {
       <Row label="Online" value={diag.isOnline ? "yes" : "no"} />
       <Row label="Pending complete" value={String(diag.pendingCompletes.length)} />
 
+      {diag.pendingCompletes.map((pc) => (
+        <View key={pc.sessionId} style={styles.pendingCard}>
+          <Text style={styles.pendingTitle} numberOfLines={1}>
+            {pc.failedAt ? "Completion failed" : "Completion pending"}
+          </Text>
+          <Text style={styles.pendingMeta}>
+            attempts {pc.attempts ?? 0} · next {formatDelay(pc.nextAttemptAt)}
+          </Text>
+          {pc.lastStatus != null && (
+            <Text style={styles.pendingMeta}>HTTP {pc.lastStatus}</Text>
+          )}
+          {pc.lastError && (
+            <Text style={styles.pendingError} numberOfLines={4}>
+              {pc.lastError}
+            </Text>
+          )}
+          <Text style={styles.errorSession} numberOfLines={1}>
+            session: {pc.sessionId}
+          </Text>
+        </View>
+      ))}
+
       <Text style={styles.sectionTitle}>Session</Text>
       <Row label="User ID" value={diag.userId ?? "—"} mono />
       <Row label="Token valid" value={diag.tokenValid ? "yes" : "NO"} />
@@ -84,6 +114,10 @@ export default function DiagnosticsScreen() {
 
       <Text style={styles.sectionTitle}>Config</Text>
       <Row label="API base URL" value={diag.apiBaseUrl} mono />
+      <Row label="API URL valid" value={diag.apiBaseUrlValid ? "yes" : "NO"} />
+      {diag.apiBaseUrlError && (
+        <Text style={styles.configError}>{diag.apiBaseUrlError}</Text>
+      )}
 
       <View style={styles.errorHeader}>
         <Text style={styles.sectionTitle}>Recent upload errors ({diag.errors.length})</Text>
@@ -155,6 +189,25 @@ const styles = StyleSheet.create({
   rowValue: { color: "#d4d4d8", fontSize: 13, flex: 0.55, textAlign: "right" },
   mono: { fontFamily: "Menlo" },
   dim: { color: "#71717a", fontSize: 13, marginTop: 8 },
+  configError: {
+    color: "#f87171",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  pendingCard: {
+    backgroundColor: "#18181b",
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 4,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "rgba(250,204,21,0.35)",
+  },
+  pendingTitle: { color: "#facc15", fontSize: 13, fontWeight: "700" },
+  pendingMeta: { color: "#a1a1aa", fontSize: 12, marginTop: 3 },
+  pendingError: { color: "#d4d4d8", fontSize: 12, marginTop: 6, fontFamily: "Menlo" },
   errorHeader: {
     flexDirection: "row",
     justifyContent: "space-between",

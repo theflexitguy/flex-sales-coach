@@ -5,6 +5,8 @@ import { AppState, View, ActivityIndicator } from "react-native";
 import type { AppStateStatus } from "react-native";
 import { useAuthStore } from "../stores/auth-store";
 import { uploadQueue } from "../services/recording/UploadQueue";
+import { chunkManager } from "../services/recording/ChunkManager";
+import { locationTracker } from "../services/recording/LocationTracker";
 import { useRecordingStore } from "../stores/recording-store";
 import { UploadProgressBanner } from "../components/upload-progress-banner";
 
@@ -17,7 +19,10 @@ export default function RootLayout() {
 
   useEffect(() => {
     initialize().then(() => setReady(true)).catch(() => setReady(true));
-    uploadQueue.restore();
+    chunkManager
+      .drainNativeFinalizedChunks()
+      .finally(() => locationTracker.flushPendingNative())
+      .finally(() => uploadQueue.restore());
   }, []);
 
   // After auth is ready, recover any orphaned recording sessions from a crash/kill
@@ -36,7 +41,10 @@ export default function RootLayout() {
         if (isRecording && startedAt) {
           useRecordingStore.setState({ elapsedMs: Date.now() - startedAt.getTime() });
         }
-        uploadQueue.restore();
+        chunkManager
+          .drainNativeFinalizedChunks()
+          .finally(() => locationTracker.flushPendingNative())
+          .finally(() => uploadQueue.restore());
       }
       appState.current = nextState;
     });

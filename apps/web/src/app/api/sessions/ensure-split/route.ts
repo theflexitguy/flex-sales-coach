@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { getInternalSecret } from "@/lib/api-auth-server";
+import { reconcileSessionChunks } from "@/lib/session-chunk-reconcile";
 
 /**
  * Finds this rep's sessions that are stuck and re-runs the split
@@ -59,13 +61,22 @@ export async function POST(request: Request) {
   }
 
   const origin = new URL(request.url).origin;
-  const internalSecret = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
+  const internalSecret = getInternalSecret();
   const recovered: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
 
   for (const s of sessions) {
     const stoppedAt = s.stopped_at ? new Date(s.stopped_at).getTime() : null;
     const heartbeat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
+
+    try {
+      await reconcileSessionChunks(admin, s.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      skipped.push({ id: s.id, reason: `reconcile_error: ${message}` });
+      log(500, "reconcile_error", { userId: auth.user.id, sessionId: s.id, message });
+      continue;
+    }
 
     // Always check chunk count first — it's the real source of truth
     // about whether there's audio worth processing. A heartbeat-dead

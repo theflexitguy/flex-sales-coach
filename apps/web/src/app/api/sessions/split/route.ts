@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdmin } from "@flex/supabase/admin";
-import { isInternalCall } from "@/lib/api-auth-server";
+import { isInternalCall, getInternalSecret } from "@/lib/api-auth-server";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { execSync } from "child_process";
@@ -16,6 +16,7 @@ import {
   type ChunkWord,
   type ChunkUtterance,
 } from "@/lib/chunk-transcribe";
+import { reconcileSessionChunks } from "@/lib/session-chunk-reconcile";
 
 // Bundled FFmpeg binaries — required because Vercel Functions don't have
 // system ffmpeg installed.
@@ -446,6 +447,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    // Idempotency: if this session already completed a split run, don't
+    // re-run. Cron's 6-min stale threshold + Vercel retries mean split
+    // can legitimately be invoked twice for the same session; without
+    // this guard we'd create duplicate `calls` rows and duplicate audio
+    // in storage.
+    if (session.status === "completed") {
+      return NextResponse.json({
+        success: true,
+        sessionId,
+        conversationsFound: session.conversations_found ?? 0,
+        skipped: "already_completed",
+      });
+    }
+
+    await reconcileSessionChunks(admin, sessionId);
+
     const { data: chunks } = await admin
       .from("session_chunks")
       .select("*")
@@ -670,13 +687,28 @@ export async function POST(request: Request) {
       }
 
       const origin = new URL(request.url).origin;
-      const internalSecret = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
+      const internalSecret = getInternalSecret();
       const internalHeaders = {
         "Content-Type": "application/json",
         "x-internal-secret": internalSecret,
       };
 
       const conversationCount = segmentPaths.length;
+
+      // Clear any prior split artifacts for this session so a re-run
+      // produces exactly one set of calls + transcripts. Combined with
+      // the deterministic segment storage path + the unique index on
+      // calls(session_id, session_order), this makes /split fully
+      // idempotent.
+      const { data: existingCalls } = await admin
+        .from("calls")
+        .select("id")
+        .eq("session_id", sessionId);
+      const existingCallIds = (existingCalls ?? []).map((c) => c.id);
+      if (existingCallIds.length > 0) {
+        await admin.from("transcripts").delete().in("call_id", existingCallIds);
+        await admin.from("calls").delete().eq("session_id", sessionId);
+      }
 
       for (let i = 0; i < segmentPaths.length; i++) {
         const seg = segmentPaths[i];
@@ -686,14 +718,15 @@ export async function POST(request: Request) {
           ? session.label
           : `Conversation ${i + 1}`;
 
-        // Upload segment audio
-        const timestamp = Date.now();
-        const storagePath = `${session.rep_id}/${timestamp}_session_${i}.m4a`;
+        // Deterministic path so a cron re-trigger overwrites the same
+        // object instead of accumulating `_session_0.m4a` dupes under
+        // fresh Date.now() timestamps.
+        const storagePath = `${session.rep_id}/${sessionId}/segment_${i}.m4a`;
         await admin.storage
           .from("call-recordings")
           .upload(storagePath, readFileSync(seg.path), {
             contentType: "audio/mp4",
-            upsert: false,
+            upsert: true,
           });
 
         // Geotag: prefer fine-grained location points, fall back to chunk / session

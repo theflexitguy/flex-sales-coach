@@ -58,7 +58,10 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       const coords = await getCurrentLocation();
 
       // Create session on server (server also guards against duplicates)
-      const { sessionId } = await apiPost<{ sessionId: string }>(
+      const { sessionId, nextChunkIndex } = await apiPost<{
+        sessionId: string;
+        nextChunkIndex?: number;
+      }>(
         "/api/sessions/start",
         {
           startedAt: new Date().toISOString(),
@@ -94,7 +97,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       });
 
       // Start recording
-      await chunkManager.startSession(sessionId);
+      await chunkManager.startSession(sessionId, nextChunkIndex ?? 0);
 
       set({
         isRecording: true,

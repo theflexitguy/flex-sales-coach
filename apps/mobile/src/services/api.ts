@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import { API_BASE_URL } from "../constants/recording";
+import { apiUrl } from "../constants/recording";
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const {
@@ -14,7 +14,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 export async function apiGet<T>(path: string): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`${API_BASE_URL}${path}`, { headers });
+  const res = await fetch(apiUrl(path), { headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error ?? "Request failed");
@@ -24,7 +24,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: body ? JSON.stringify(body) : undefined,
@@ -44,7 +44,7 @@ export async function apiUpload<T>(
     data: { session },
   } = await supabase.auth.getSession();
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${session?.access_token ?? ""}`,
@@ -60,7 +60,7 @@ export async function apiUpload<T>(
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "PATCH",
     headers,
     body: JSON.stringify(body),

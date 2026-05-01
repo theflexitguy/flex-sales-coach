@@ -2,6 +2,7 @@ import { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { haptic } from "../../lib/haptics";
+import { apiUrl } from "../../constants/recording";
 
 export default function SignupScreen() {
   const [fullName, setFullName] = useState("");
@@ -18,7 +19,7 @@ export default function SignupScreen() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/auth/signup`, {
+      const res = await fetch(apiUrl("/api/auth/signup"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

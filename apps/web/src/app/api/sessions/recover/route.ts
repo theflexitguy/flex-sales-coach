@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth-server";
+import { requireApiAuth, getInternalSecret } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
+import { reconcileSessionChunks } from "@/lib/session-chunk-reconcile";
 
 /**
  * Recover orphaned recording sessions (app crashed, killed, or never completed).
@@ -41,8 +42,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
+  try {
+    await reconcileSessionChunks(admin, sessionId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown";
+    return NextResponse.json(
+      { success: false, recovered: false, reason: "reconcile_error", error: message },
+      { status: 500 }
+    );
+  }
+
+  const { data: refreshedSession } = await admin
+    .from("recording_sessions")
+    .select("id, rep_id, chunk_count, label")
+    .eq("id", sessionId)
+    .single();
+  const reconciledSession = refreshedSession ?? session;
+
   // If no chunks made it through, mark as failed and move on — nothing to process
-  if ((session.chunk_count ?? 0) === 0) {
+  if ((reconciledSession.chunk_count ?? 0) === 0) {
     await admin
       .from("recording_sessions")
       .update({
@@ -59,7 +77,7 @@ export async function POST(request: Request) {
     .from("recording_sessions")
     .update({
       status: "processing",
-      label: label ?? session.label ?? "Recovered session",
+      label: label ?? reconciledSession.label ?? "Recovered session",
       stopped_at: new Date().toISOString(),
     })
     .eq("id", sessionId);
@@ -70,7 +88,7 @@ export async function POST(request: Request) {
   // Vercel serverless model. Awaiting costs a little more wall time but
   // guarantees we know split succeeded before returning.
   const origin = new URL(request.url).origin;
-  const internalSecret = process.env.INTERNAL_API_SECRET || "flex-internal-2024";
+  const internalSecret = getInternalSecret();
   try {
     const res = await fetch(`${origin}/api/sessions/split`, {
       method: "POST",
