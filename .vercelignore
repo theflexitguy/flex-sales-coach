@@ -2,7 +2,7 @@ node_modules
 **/node_modules
 
 apps/web/.next
-apps/mobile/ios
+apps/mobile
 apps/mobile/.expo
 
 .git
