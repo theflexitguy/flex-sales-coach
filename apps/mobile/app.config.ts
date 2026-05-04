@@ -33,7 +33,7 @@ const config: ExpoConfig = {
         "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "30",
+    buildNumber: "31",
   },
   android: {
     adaptiveIcon: {
