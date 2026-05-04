@@ -59,6 +59,7 @@ export default function RoleplaySessionScreen() {
   const [scenario, setScenario] = useState<ScenarioDetail | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+  const [analysisDelayed, setAnalysisDelayed] = useState(false);
 
   const {
     phase, personaName, agentSpeaking, transcript,
@@ -81,28 +82,43 @@ export default function RoleplaySessionScreen() {
   useEffect(() => {
     if (phase !== "completed" || !result?.sessionId) return;
     setLoadingAnalysis(true);
+    setAnalysisDelayed(false);
+
+    let pollCount = 0;
+    let recoveryRequested = false;
 
     const pollInterval = setInterval(async () => {
       try {
-        const data = await apiGet<{ analysis: AnalysisResult | null }>(
-          `/api/mobile/roleplay/sessions?sessionId=${result.sessionId}`
+        pollCount += 1;
+        const shouldRecoverAnalysis = pollCount >= 10 && !recoveryRequested;
+        if (shouldRecoverAnalysis) recoveryRequested = true;
+
+        const data = await apiGet<{ analysis: AnalysisResult | null; analysisStatus?: string }>(
+          `/api/mobile/roleplay/sessions?sessionId=${result.sessionId}${shouldRecoverAnalysis ? "&recoverAnalysis=1" : ""}`
         );
         if (data.analysis) {
           setAnalysis(data.analysis);
           setLoadingAnalysis(false);
+          setAnalysisDelayed(false);
           clearInterval(pollInterval);
         }
       } catch { /* keep polling */ }
     }, 3000);
 
-    // Stop after 30s
+    const slowNotice = setTimeout(() => {
+      setAnalysisDelayed(true);
+    }, 30000);
+
+    // Longer sessions can take a bit to score; keep the result screen alive.
     const timeout = setTimeout(() => {
       clearInterval(pollInterval);
       setLoadingAnalysis(false);
-    }, 30000);
+      setAnalysisDelayed(true);
+    }, 180000);
 
     return () => {
       clearInterval(pollInterval);
+      clearTimeout(slowNotice);
       clearTimeout(timeout);
     };
   }, [phase, result?.sessionId]);
@@ -266,7 +282,9 @@ export default function RoleplaySessionScreen() {
       {loadingAnalysis ? (
         <View style={styles.analysisLoading}>
           <ActivityIndicator color="#35b2ff" />
-          <Text style={styles.analysisLoadingText}>Analyzing your performance...</Text>
+          <Text style={styles.analysisLoadingText}>
+            {analysisDelayed ? "Still analyzing. Longer roleplays can take a minute." : "Analyzing your performance..."}
+          </Text>
         </View>
       ) : analysis ? (
         <View style={styles.analysisCard}>
@@ -335,7 +353,7 @@ export default function RoleplaySessionScreen() {
           )}
         </View>
       ) : (
-        <Text style={styles.noAnalysis}>Analysis not available yet</Text>
+        <Text style={styles.noAnalysis}>Analysis is still processing. Check History shortly.</Text>
       )}
 
       {/* Actions */}

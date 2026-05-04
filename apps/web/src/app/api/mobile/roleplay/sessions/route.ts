@@ -1,6 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { analyzeRoleplaySession } from "@/lib/roleplay-analysis";
+
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request);
@@ -12,6 +15,7 @@ export async function GET(request: Request) {
   // Single session lookup (for polling analysis)
   const sessionId = url.searchParams.get("sessionId");
   if (sessionId) {
+    const recoverAnalysis = url.searchParams.get("recoverAnalysis") === "1";
     const { data: session } = await admin
       .from("roleplay_sessions")
       .select("id, status, duration_seconds, transcript_text, started_at, ended_at, roleplay_analyses(*)")
@@ -22,6 +26,23 @@ export async function GET(request: Request) {
     if (!session) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const analysisRow = (session.roleplay_analyses as Array<Record<string, unknown>>)?.[0] ?? null;
+    const shouldTriggerAnalysis = recoverAnalysis && !analysisRow && session.status === "completed" && !!session.transcript_text;
+
+    if (shouldTriggerAnalysis) {
+      after(async () => {
+        try {
+          await analyzeRoleplaySession(session.id);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "unknown";
+          console.error(JSON.stringify({
+            route: "/api/mobile/roleplay/sessions",
+            reason: "analysis_recovery_failed",
+            sessionId: session.id,
+            message,
+          }));
+        }
+      });
+    }
 
     return NextResponse.json({
       session: {
@@ -40,6 +61,7 @@ export async function GET(request: Request) {
         objectionHandlingScores: analysisRow.objection_handling_scores,
         comparedToReal: analysisRow.compared_to_real,
       } : null,
+      analysisStatus: analysisRow ? "complete" : shouldTriggerAnalysis ? "processing" : "unavailable",
     });
   }
 

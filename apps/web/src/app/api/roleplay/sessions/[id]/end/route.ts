@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
-import { getInternalSecret } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
+import { analyzeRoleplaySession } from "@/lib/roleplay-analysis";
+
+export const maxDuration = 300;
 
 interface ClientTranscriptLine {
   readonly role?: unknown;
@@ -92,21 +94,21 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Trigger analysis in the background
-  const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ? request.url.split("/api/")[0] : "";
+  // Trigger analysis after the response without relying on fire-and-forget fetch.
   if (transcriptText) {
-    try {
-      const internalSecret = getInternalSecret();
-      fetch(`${baseUrl}/api/roleplay/sessions/${id}/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-internal-secret": internalSecret,
-        },
-      }).catch(() => {});
-    } catch {
-      // Ending the session should not fail just because async analysis is not configured.
-    }
+    after(async () => {
+      try {
+        await analyzeRoleplaySession(id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "unknown";
+        console.error(JSON.stringify({
+          route: "/api/roleplay/sessions/[id]/end",
+          reason: "analysis_failed_in_after",
+          sessionId: id,
+          message,
+        }));
+      }
+    });
   }
 
   return NextResponse.json({

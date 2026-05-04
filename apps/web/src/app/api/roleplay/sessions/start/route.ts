@@ -42,13 +42,13 @@ function pickOpenAIVoice(persona: {
 function difficultyRules(difficulty: RoleplayDifficulty): string {
   switch (difficulty) {
     case "beginner":
-      return "Level: EASY. Be realistic but coachable. Raise one clear objection, let good rapport soften you, and allow a clean path to a next step when the rep earns it.";
+      return "Level: EASY. Be realistic but coachable. Raise one clear objection, let good rapport soften you, and allow a clean path to a next step when the rep earns it. If the rep asks a useful question, gives a specific value reason, and confidently asks for the next step, you can agree.";
     case "intermediate":
-      return "Level: MEDIUM. Be cautious and busy. Require rapport before listening, raise one or two objections, interrupt lightly, and do not accept claims without a simple reason to believe.";
+      return "Level: MEDIUM. Be cautious and busy. Require rapport before listening, raise one or two objections, interrupt lightly, and do not accept claims without a simple reason to believe. You should become open to a next step when the rep connects the service to your situation and handles your first objection cleanly.";
     case "advanced":
-      return "Level: HARD. Be guarded, impatient, and skeptical. Raise layered objections, expose weak discovery, resist generic scripts, and only soften when the rep pre-overcomes concerns and connects value to your situation.";
+      return "Level: HARD. Be guarded, impatient, and skeptical. Raise layered objections, expose weak discovery, resist generic scripts, and only soften when the rep pre-overcomes concerns and connects value to your situation. This is still winnable: if the rep builds enough trust, asks sharp discovery questions, handles the core objection with a practical next step, and closes efficiently, reveal a buying signal or agree to a reasonable next step.";
     case "extreme":
-      return "Level: EXTREME. Make this feel like a difficult real doorstep. Combine multiple barriers: current provider, spouse/authority issue, price concern, bad timing, trust skepticism, and interruptions. Do not be rude for no reason, but do not cooperate unless the rep earns attention with rapport, sharp questions, pre-overcoming, confidence, and a strong close.";
+      return "Level: EXTREME. Make this feel like a difficult real doorstep. Combine multiple barriers: current provider, spouse/authority issue, price concern, bad timing, trust skepticism, and interruptions. Do not be rude for no reason, but do not cooperate unless the rep earns attention with rapport, sharp questions, pre-overcoming, confidence, and a strong close. This is winnable only with excellent execution: if the rep calmly controls the conversation, gets you to acknowledge a real problem or risk, creates a spouse-involved or low-risk next step, and asks directly, you can agree to that next step.";
   }
 }
 
@@ -76,6 +76,8 @@ Speak naturally with realistic hesitation, interruptions, short answers, and obj
 Door-to-door is hard. The rep must build rapport, ask useful questions, pre-overcome concerns, explain value clearly, and earn the next step. Do not simply answer questions or agree because the rep sounds nice.
 ${difficultyRules(difficulty)}${objectionBlock}
 Push back when a real homeowner would push back. If the rep skips rapport, talks too much, fails to handle authority/spouse concerns, or gives a generic pitch, become shorter and harder to win back.
+Every scenario must be winnable, but only when the rep earns it at the required difficulty level. Do not stonewall forever or repeat the same objection indefinitely after the rep has handled it well. If the rep handles your main concern twice with specific, confident, human answers, either reveal the deeper concern, offer a small buying signal, or accept a reasonable next step.
+For spouse or authority objections, do not treat "I need to talk to my spouse" as an unbeatable wall. A strong rep can earn progress by validating the spouse, asking what the spouse would care about, setting a spouse-involved appointment, getting permission for a quick inspection, or framing a low-risk next action. Make the rep work for it, but let good selling move the conversation forward.
 Do not reveal your internal logic, hidden objections, decision criteria, or what would persuade you. Homeowners do not narrate everything they think. Show resistance through tone, short answers, questions, hesitation, and selective details instead of explaining your reasoning.
 Give subtle buying signals only after the rep earns trust. Reward specific, confident, human selling; punish canned scripts. Keep responses concise unless the rep earns a longer answer with a good question.
 End only when the rep clearly wraps up the conversation or the user taps End in the app.`;
