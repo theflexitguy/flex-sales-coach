@@ -5,12 +5,9 @@ import { useRouter } from "expo-router";
 import { uploadQueue } from "../services/recording/UploadQueue";
 
 // Persistent banner that sits at the top of every screen whenever the
-// upload queue has pending chunks. The reason it exists: a rep hits
-// Stop at the end of the day, walks to their truck, locks the phone —
-// and the queue may have 40 chunks still to upload on cellular. Without
-// a persistent surface the rep has no idea it's still working, can
-// force-quit the app, and lose audio. This banner makes "don't close
-// the app" visible no matter what screen they're on.
+// upload queue has pending local audio files. The recorder is local-first:
+// files stay on device until upload + metadata registration succeed, then
+// the queue deletes them from the local spool.
 //
 // Polls the upload queue every second. The queue itself is driven by
 // NetInfo + its own processing loop, so this is just a view into state.
@@ -61,8 +58,8 @@ export function UploadProgressBanner() {
           <View style={styles.textCol}>
             <Text style={styles.title}>
               {hasError
-                ? `Upload issue — ${pending} chunk${pending === 1 ? "" : "s"} left`
-                : `Uploading ${pending} chunk${pending === 1 ? "" : "s"} — do not close the app`}
+                ? `Sync issue — ${pending} audio file${pending === 1 ? "" : "s"} left`
+                : `Syncing ${pending} local audio file${pending === 1 ? "" : "s"}`}
             </Text>
             <Text style={styles.subtitle}>
               {uploaded} of {total} sent · tap for details

@@ -31,6 +31,15 @@ function formatDelay(ms: number | undefined): string {
   return `${mins} min`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
 export default function DiagnosticsScreen() {
   const [diag, setDiag] = useState<UploadDiagnostics | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -81,6 +90,12 @@ export default function DiagnosticsScreen() {
       <Text style={styles.sectionTitle}>Queue</Text>
       <Row label="Pending" value={String(diag.queueSize)} />
       <Row label="Uploaded" value={String(diag.uploadedCount)} />
+      <Row label="Local audio files" value={String(diag.localSpoolFiles)} />
+      <Row label="Local audio size" value={formatBytes(diag.localSpoolBytes)} />
+      <Row
+        label="Native uploads"
+        value={diag.nativePendingUploads == null ? "—" : String(diag.nativePendingUploads)}
+      />
       <Row label="Processing" value={diag.processing ? "yes" : "no"} />
       <Row label="Online" value={diag.isOnline ? "yes" : "no"} />
       <Row label="Pending complete" value={String(diag.pendingCompletes.length)} />

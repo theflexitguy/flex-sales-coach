@@ -62,6 +62,9 @@ export interface UploadDiagnostics {
   apiBaseUrlError: string | null;
   queueSize: number;
   uploadedCount: number;
+  localSpoolFiles: number;
+  localSpoolBytes: number;
+  nativePendingUploads: number | null;
   pendingCompletes: PendingComplete[];
   isOnline: boolean;
   processing: boolean;
@@ -84,6 +87,54 @@ const ERROR_RING_SIZE = 20;
 // does.
 const COMPLETE_RETRY_MS = 15000;
 const COMPLETE_MAX_RETRY_WINDOW_MS = 6 * 60 * 60 * 1000;
+const LOCAL_SPOOL_DIR = `${FileSystem.documentDirectory ?? ""}flex-chunks`;
+
+interface LocalSpoolStats {
+  files: number;
+  bytes: number;
+}
+
+function ensureFileUri(pathOrUri: string): string {
+  return pathOrUri.startsWith("file://") ? pathOrUri : `file://${pathOrUri}`;
+}
+
+function withoutFileScheme(uri: string): string {
+  return uri.replace(/^file:\/\//, "");
+}
+
+async function getLocalSpoolStats(): Promise<LocalSpoolStats> {
+  if (!FileSystem.documentDirectory) return { files: 0, bytes: 0 };
+
+  async function walk(dir: string): Promise<LocalSpoolStats> {
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists) return { files: 0, bytes: 0 };
+
+    const entries = await FileSystem.readDirectoryAsync(dir).catch(() => []);
+    let files = 0;
+    let bytes = 0;
+
+    for (const entry of entries) {
+      const child = `${dir.replace(/\/+$/, "")}/${entry}`;
+      const childInfo = await FileSystem.getInfoAsync(child);
+      if (!childInfo.exists) continue;
+
+      if ("isDirectory" in childInfo && childInfo.isDirectory) {
+        const nested = await walk(child);
+        files += nested.files;
+        bytes += nested.bytes;
+      } else {
+        files += 1;
+        bytes += "size" in childInfo && typeof childInfo.size === "number"
+          ? childInfo.size
+          : 0;
+      }
+    }
+
+    return { files, bytes };
+  }
+
+  return walk(LOCAL_SPOOL_DIR);
+}
 
 class UploadQueue {
   private queue: ChunkUploadJob[] = [];
@@ -155,6 +206,7 @@ class UploadQueue {
     let tokenExpiry: number | null = null;
     let tokenValid = false;
     let userId: string | null = null;
+    let nativePendingUploads: number | null = null;
     try {
       const { data } = await supabase.auth.getSession();
       if (data.session) {
@@ -165,12 +217,19 @@ class UploadQueue {
     } catch {
       // ignore
     }
+    if (nativeBackgroundUploader.isAvailable()) {
+      nativePendingUploads = await nativeBackgroundUploader.getPendingCount().catch(() => null);
+    }
+    const spool = await getLocalSpoolStats().catch(() => ({ files: 0, bytes: 0 }));
     return {
       apiBaseUrl: API_BASE_URL,
       apiBaseUrlValid: API_BASE_URL_STATUS.valid,
       apiBaseUrlError: API_BASE_URL_STATUS.error,
       queueSize: this.queue.length,
       uploadedCount: this.uploadedCount,
+      localSpoolFiles: spool.files,
+      localSpoolBytes: spool.bytes,
+      nativePendingUploads,
       pendingCompletes: [...this.pendingCompletes],
       isOnline: this.isOnline,
       processing: this.processing,
@@ -234,10 +293,10 @@ class UploadQueue {
 
       await this.syncNativeUploaderState();
 
-      // Drop jobs whose underlying files no longer exist. iOS Caches is
-      // purgeable — after an app restart or update the m4a may be gone.
-      // Retrying forever spams the UI with a scary "chunk file missing"
-      // error on every launch.
+      // Drop jobs whose underlying files no longer exist. Native chunks
+      // live in Documents/flex-chunks and should remain until cleanup,
+      // so this usually means the file was already deleted after a
+      // successful upload or the OS/user removed app data.
       if (this.queue.length > 0) {
         const survivors: ChunkUploadJob[] = [];
         const dropped: ChunkUploadJob[] = [];
@@ -450,6 +509,31 @@ class UploadQueue {
     });
   }
 
+  private async deleteLocalChunkFile(
+    uriOrPath: string | null | undefined,
+    sessionId: string,
+    chunkIndex: number
+  ): Promise<void> {
+    if (!uriOrPath) return;
+
+    const uri = ensureFileUri(uriOrPath);
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (!info.exists) return;
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      this.recordUploadEvent({
+        at: Date.now(),
+        sessionId,
+        chunkIndex,
+        retries: 0,
+        stage: "storage",
+        message: `uploaded but failed to delete local spool file ${uri}: ${message}`,
+      });
+    }
+  }
+
   private updateCompleteRetryTimer(): void {
     const shouldRun = this.pendingCompletes.some((pc) => !pc.failedAt);
     if (shouldRun && !this.completeRetryTimer) {
@@ -491,6 +575,7 @@ class UploadQueue {
         const job = this.queue[0];
         try {
           await this.uploadChunk(job);
+          await this.deleteLocalChunkFile(job.uri, job.sessionId, job.chunkIndex);
           this.queue.shift();
           this.uploadedCount += 1;
           await this.persist();
@@ -623,6 +708,8 @@ class UploadQueue {
     if (!info.exists) {
       throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
     }
+    const fileSizeBytes =
+      "size" in info && typeof info.size === "number" ? info.size : null;
 
     const urlRes = await fetch(apiUrl("/api/sessions/chunk/upload-url"), {
       method: "POST",
@@ -649,7 +736,7 @@ class UploadQueue {
 
     // Strip file:// prefix if present — URLSession.uploadTaskWithRequest:fromFile
     // wants a plain filesystem path.
-    const localPath = job.uri.replace(/^file:\/\//, "");
+    const localPath = withoutFileScheme(job.uri);
 
     const { taskId } = await nativeBackgroundUploader.enqueueUpload(
       localPath,
@@ -662,6 +749,9 @@ class UploadQueue {
         latitude: job.latitude,
         longitude: job.longitude,
         storagePath,
+        localUri: job.uri,
+        localFilePath: localPath,
+        fileSizeBytes,
       }
     );
 
@@ -694,6 +784,12 @@ class UploadQueue {
       job?.latitude ?? ((meta.latitude as number | null | undefined) ?? null);
     const longitude =
       job?.longitude ?? ((meta.longitude as number | null | undefined) ?? null);
+    const localUri =
+      job?.uri ??
+      (meta.localUri as string | undefined) ??
+      (typeof meta.localFilePath === "string"
+        ? ensureFileUri(meta.localFilePath)
+        : null);
 
     if (sessionId == null || chunkIndex == null || storagePath == null) {
       // Can't register — log and drop. Session ensure-split sweep will
@@ -742,6 +838,7 @@ class UploadQueue {
       if (job) {
         this.queue = this.queue.filter((j) => j !== job);
       }
+      await this.deleteLocalChunkFile(localUri, sessionId, chunkIndex);
       this.uploadedCount += 1;
       await this.persist();
       this.emitStatus();
