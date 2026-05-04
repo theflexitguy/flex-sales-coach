@@ -2,6 +2,18 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 
+const DIFFICULTY_ORDER: Record<string, number> = {
+  beginner: 0,
+  intermediate: 1,
+  advanced: 2,
+  extreme: 3,
+};
+
+function displayDifficulty(difficulty: string, contextPrompt?: string | null): string {
+  if (/ROLEPLAY_LEVEL:\s*EXTREME/i.test(contextPrompt ?? "")) return "extreme";
+  return difficulty;
+}
+
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -27,7 +39,7 @@ export async function GET(request: Request) {
   // Get scenarios with persona data
   const { data: scenarios } = await admin
     .from("roleplay_scenarios")
-    .select("id, persona_id, title, description, scenario_type, difficulty, target_objections, roleplay_personas(id, name, description, voice_id, personality)")
+    .select("id, persona_id, title, description, scenario_type, difficulty, target_objections, context_prompt, roleplay_personas(id, name, description, voice_id, personality)")
     .eq("team_id", profile.team_id)
     .eq("is_active", true)
     .order("difficulty")
@@ -70,13 +82,14 @@ export async function GET(request: Request) {
   const enriched = (scenarios ?? []).map((s) => {
     const targets = s.target_objections as string[];
     const isRecommended = targets.some((t) => weakCategories.includes(t));
+    const difficulty = displayDifficulty(s.difficulty, s.context_prompt);
     return {
       id: s.id,
       personaId: s.persona_id,
       title: s.title,
       description: s.description,
       scenarioType: s.scenario_type,
-      difficulty: s.difficulty,
+      difficulty,
       targetObjections: s.target_objections,
       persona: s.roleplay_personas,
       recommended: isRecommended,
@@ -87,7 +100,7 @@ export async function GET(request: Request) {
   enriched.sort((a, b) => {
     if (a.recommended && !b.recommended) return -1;
     if (!a.recommended && b.recommended) return 1;
-    return 0;
+    return (DIFFICULTY_ORDER[a.difficulty] ?? 1) - (DIFFICULTY_ORDER[b.difficulty] ?? 1);
   });
 
   return NextResponse.json({

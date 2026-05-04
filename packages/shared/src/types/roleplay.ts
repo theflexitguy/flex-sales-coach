@@ -1,5 +1,5 @@
 export type ScenarioType = "objection_drill" | "full_pitch" | "cold_open" | "callback" | "custom";
-export type Difficulty = "beginner" | "intermediate" | "advanced";
+export type Difficulty = "beginner" | "intermediate" | "advanced" | "extreme";
 export type RoleplaySessionStatus = "active" | "completed" | "abandoned";
 export type VoiceProvider = "openai-realtime" | "grok-realtime";
 

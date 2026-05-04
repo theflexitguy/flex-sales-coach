@@ -11,6 +11,14 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   beginner: "#22c55e",
   intermediate: "#eab308",
   advanced: "#ef4444",
+  extreme: "#f43f5e",
+};
+
+const DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "Easy",
+  intermediate: "Medium",
+  advanced: "Hard",
+  extreme: "Extreme",
 };
 
 const TYPE_ICONS: Record<string, string> = {
@@ -144,7 +152,7 @@ export function ScenarioBrowser() {
                 </View>
               )}
               <Text style={[styles.difficulty, { color: DIFFICULTY_COLORS[item.difficulty] }]}>
-                {item.difficulty}
+                {DIFFICULTY_LABELS[item.difficulty] ?? item.difficulty}
               </Text>
             </View>
           </View>

@@ -11,7 +11,13 @@ You will receive:
 2. The team's objection library (categories and examples)
 3. The rep team's weakest objection categories
 
-For each persona, generate 2-3 training scenarios of varying difficulty. Return a JSON array:
+For each persona, generate 3-4 training scenarios across these levels:
+- beginner = Easy: friendly homeowner, one clear objection, rep can recover from small mistakes.
+- intermediate = Medium: realistic skepticism, needs rapport, one or two objections, mild interruptions.
+- advanced = Hard: impatient or guarded homeowner, multiple objections, hidden decision maker or timing issue, weak rapport causes shutdown.
+- EXTREME: high-pressure doorstep, layered objections, spouse/authority barrier, competitor/current service, price pressure, interruptions, and the rep must pre-overcome concerns before pitching. Store EXTREME scenarios with "difficulty": "advanced" and begin context_prompt with "ROLEPLAY_LEVEL: EXTREME".
+
+Return a JSON array:
 
 [
   {
@@ -26,7 +32,7 @@ For each persona, generate 2-3 training scenarios of varying difficulty. Return 
 ]
 
 Prioritize scenarios that target the team's weakest objection categories.
-Make scenarios realistic for door-to-door pest control.
+Make scenarios realistic for door-to-door pest control. Door-to-door is hard: these should require skill, pre-overcoming objections, building rapport, asking good questions, and reading the homeowner. Do not make the customer a pushover. Even Easy should require a real close; Hard and EXTREME should punish generic scripts.
 Return ONLY valid JSON, no markdown or explanation.`;
 
 export async function POST(request: Request) {
@@ -119,13 +125,15 @@ export async function POST(request: Request) {
   const validPersonaIds = new Set(personas.map((p) => p.id));
   const validScenarios = scenarios.filter((s) => validPersonaIds.has(s.persona_id));
 
+  const allowedDifficulties = new Set(["beginner", "intermediate", "advanced"]);
+
   const rows = validScenarios.map((s) => ({
     team_id: teamId,
     persona_id: s.persona_id,
     title: s.title,
     description: s.description,
     scenario_type: s.scenario_type,
-    difficulty: s.difficulty,
+    difficulty: allowedDifficulties.has(s.difficulty) ? s.difficulty : "intermediate",
     target_objections: s.target_objections,
     context_prompt: s.context_prompt,
   }));

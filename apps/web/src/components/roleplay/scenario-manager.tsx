@@ -26,6 +26,13 @@ interface Scenario {
   roleplay_personas: { id: string; name: string } | null;
 }
 
+const DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "Easy",
+  intermediate: "Medium",
+  advanced: "Hard",
+  extreme: "Extreme",
+};
+
 export function ScenarioManager() {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -211,9 +218,10 @@ export function ScenarioManager() {
                       <span className={`text-xs font-medium capitalize ${
                         s.difficulty === "beginner" ? "text-green-400"
                         : s.difficulty === "advanced" ? "text-red-400"
+                        : s.difficulty === "extreme" ? "text-rose-400"
                         : "text-amber-400"
                       }`}>
-                        {s.difficulty}
+                        {DIFFICULTY_LABELS[s.difficulty] ?? s.difficulty}
                       </span>
                     </div>
                   </div>

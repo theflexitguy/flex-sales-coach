@@ -14,6 +14,20 @@ const GRADE_COLORS: Record<string, string> = {
   needs_improvement: "#f97316", poor: "#ef4444",
 };
 
+const DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "Easy",
+  intermediate: "Medium",
+  advanced: "Hard",
+  extreme: "Extreme",
+};
+
+const DIFFICULTY_COLORS: Record<string, string> = {
+  beginner: "#22c55e",
+  intermediate: "#eab308",
+  advanced: "#ef4444",
+  extreme: "#f43f5e",
+};
+
 interface ScenarioDetail {
   id: string;
   title: string;
@@ -119,6 +133,11 @@ export default function RoleplaySessionScreen() {
           )}
 
           <Text style={styles.scenarioTitle}>{scenario?.title ?? "Roleplay Practice"}</Text>
+          {scenario?.difficulty && (
+            <Text style={[styles.difficultyText, { color: DIFFICULTY_COLORS[scenario.difficulty] }]}>
+              {DIFFICULTY_LABELS[scenario.difficulty] ?? scenario.difficulty}
+            </Text>
+          )}
           <Text style={styles.scenarioDesc}>{scenario?.description}</Text>
 
           {(scenario?.targetObjections?.length ?? 0) > 0 && (
@@ -359,6 +378,7 @@ const styles = StyleSheet.create({
   personaDesc: { color: "#a1a1aa", fontSize: 14, textAlign: "center", lineHeight: 20 },
   personaTone: { color: "#52525b", fontSize: 12 },
   scenarioTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  difficultyText: { fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
   scenarioDesc: { color: "#a1a1aa", fontSize: 14, lineHeight: 20 },
   objectionTags: { gap: 6 },
   objectionLabel: { color: "#71717a", fontSize: 12 },

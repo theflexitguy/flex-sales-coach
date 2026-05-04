@@ -112,7 +112,15 @@ export const DIFFICULTY_LEVELS = [
   "beginner",
   "intermediate",
   "advanced",
+  "extreme",
 ] as const;
+
+export const ROLEPLAY_DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "Easy",
+  intermediate: "Medium",
+  advanced: "Hard",
+  extreme: "Extreme",
+};
 
 export const ROLEPLAY_SESSION_STATUSES = [
   "active",

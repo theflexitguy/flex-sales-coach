@@ -2,6 +2,20 @@ import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
 
+function normalizeDifficulty(value: unknown): string {
+  if (value === "easy") return "beginner";
+  if (value === "medium") return "intermediate";
+  if (value === "hard") return "advanced";
+  if (value === "extreme") return "extreme";
+  if (value === "beginner" || value === "intermediate" || value === "advanced") return value;
+  return "intermediate";
+}
+
+function displayDifficulty(difficulty: string, contextPrompt?: string | null): string {
+  if (/ROLEPLAY_LEVEL:\s*EXTREME/i.test(contextPrompt ?? "")) return "extreme";
+  return difficulty;
+}
+
 export async function GET(request: Request) {
   const auth = await requireApiAuth(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -12,12 +26,17 @@ export async function GET(request: Request) {
 
   const { data: scenarios } = await admin
     .from("roleplay_scenarios")
-    .select("id, persona_id, title, description, scenario_type, difficulty, target_objections, is_active, created_at, roleplay_personas(id, name, voice_id)")
+    .select("id, persona_id, title, description, scenario_type, difficulty, target_objections, context_prompt, is_active, created_at, roleplay_personas(id, name, voice_id)")
     .eq("team_id", teamId)
     .eq("is_active", true)
     .order("created_at");
 
-  return NextResponse.json({ scenarios: scenarios ?? [] });
+  return NextResponse.json({
+    scenarios: (scenarios ?? []).map((s) => ({
+      ...s,
+      difficulty: displayDifficulty(s.difficulty, s.context_prompt),
+    })),
+  });
 }
 
 export async function POST(request: Request) {
@@ -46,9 +65,11 @@ export async function POST(request: Request) {
       title,
       description,
       scenario_type: scenarioType ?? "full_pitch",
-      difficulty: difficulty ?? "intermediate",
+      difficulty: normalizeDifficulty(difficulty),
       target_objections: targetObjections ?? [],
-      context_prompt: contextPrompt ?? "",
+      context_prompt: difficulty === "extreme" && !/ROLEPLAY_LEVEL:\s*EXTREME/i.test(contextPrompt ?? "")
+        ? `ROLEPLAY_LEVEL: EXTREME\n${contextPrompt ?? ""}`.trim()
+        : contextPrompt ?? "",
       created_by: auth.user.id,
     })
     .select("id, title, description, scenario_type, difficulty")
