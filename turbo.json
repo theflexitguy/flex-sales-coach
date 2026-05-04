@@ -9,6 +9,8 @@
         "SUPABASE_SERVICE_ROLE_KEY",
         "DEEPGRAM_API_KEY",
         "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_REALTIME_MODEL",
         "ELEVENLABS_API_KEY",
         "INTERNAL_API_SECRET",
         "CRON_SECRET"
