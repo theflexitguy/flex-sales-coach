@@ -33,6 +33,7 @@ Return a JSON array:
 
 Prioritize scenarios that target the team's weakest objection categories.
 Make scenarios realistic for door-to-door pest control. Door-to-door is hard: these should require skill, pre-overcoming objections, building rapport, asking good questions, and reading the homeowner. Do not make the customer a pushover. Even Easy should require a real close; Hard and EXTREME should punish generic scripts.
+All scenario titles, descriptions, and context prompts must be English only. Do not include Spanish or any non-English dialogue.
 Return ONLY valid JSON, no markdown or explanation.`;
 
 export async function POST(request: Request) {

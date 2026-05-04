@@ -109,7 +109,7 @@ export class OpenAIRealtimeService {
       });
 
       addWebRTCListener(pc, "track", () => {
-        this.callbacks.onAgentSpeaking(true);
+        this.callbacks.onAgentSpeaking(false);
       });
 
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
@@ -120,17 +120,6 @@ export class OpenAIRealtimeService {
 
       const dc = pc.createDataChannel("oai-events");
       this.dataChannel = dc;
-
-      addWebRTCListener(dc, "open", () => {
-        this.sendEvent({
-          type: "response.create",
-          response: {
-            output_modalities: ["audio"],
-            instructions:
-              "Start the roleplay now with one brief in-character homeowner opening line. Do not explain the exercise.",
-          },
-        });
-      });
 
       addWebRTCListener(dc, "message", (event) => {
         if (typeof event.data !== "string") return;
@@ -288,12 +277,6 @@ export class OpenAIRealtimeService {
       startMs: Math.max(0, endMs - 3000),
       endMs,
     });
-  }
-
-  private sendEvent(event: unknown): void {
-    if (this.dataChannel?.readyState === "open") {
-      this.dataChannel.send(JSON.stringify(event));
-    }
   }
 
   private setStatus(status: StreamStatus): void {

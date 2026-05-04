@@ -24,11 +24,11 @@ For each persona, return a JSON array of objects:
     "objection_categories": [<list of objection categories this persona commonly uses: "price"|"timing"|"need"|"trust"|"competition"|"authority"|"other">],
     "voice_gender": "<male|female>",
     "voice_age": "<young|middle-aged|senior>",
-    "system_prompt": "<detailed prompt instructing an AI to roleplay as this customer. Include: personality traits, typical responses, how they answer the door, what objections they raise, when they soften or shut down, realistic dialogue examples drawn from the transcripts. The AI should act like a real person, not an AI. Include awkward pauses, interruptions, realistic speech patterns, subtle buying signals, and the conditions under which trust is earned. The scenario is door-to-door pest control sales.>"
+    "system_prompt": "<detailed English-language prompt instructing an AI to roleplay as this customer. Include: personality traits, typical responses, how they answer the door, what objections they raise, when they soften or shut down, realistic dialogue examples drawn from the transcripts. The AI should act like a real person, not an AI. Include awkward pauses, interruptions, realistic speech patterns, subtle buying signals, and the conditions under which trust is earned. The scenario is door-to-door pest control sales.>"
   }
 ]
 
-Make personas specific to door-to-door pest control. Use actual phrases and patterns from the transcripts. Do not create pushovers: these homeowners should require rapport, curiosity, pre-overcoming objections, clear value, and a confident close before they soften.
+Make personas specific to door-to-door pest control. Use actual English phrases and patterns from the transcripts. Do not create pushovers: these homeowners should require rapport, curiosity, pre-overcoming objections, clear value, and a confident close before they soften. Do not include Spanish or any non-English dialogue.
 Return ONLY valid JSON, no markdown or explanation.`;
 
 export async function POST(request: Request) {
