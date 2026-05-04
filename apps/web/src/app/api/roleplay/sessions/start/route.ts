@@ -3,6 +3,56 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { DAILY_ROLEPLAY_SESSION_LIMIT } from "@flex/shared";
 
+type OpenAIVoice = "cedar" | "marin" | "echo" | "sage" | "coral" | "shimmer";
+
+interface OpenAIClientSecretResponse {
+  readonly value?: string;
+  readonly expires_at?: number;
+  readonly session?: {
+    readonly model?: string;
+  };
+  readonly error?: {
+    readonly message?: string;
+  };
+}
+
+function pickOpenAIVoice(persona: {
+  name: string;
+  description: string;
+  personality: unknown;
+  system_prompt: string;
+}): OpenAIVoice {
+  const haystack = [
+    persona.name,
+    persona.description,
+    persona.system_prompt,
+    JSON.stringify(persona.personality ?? {}),
+  ].join(" ").toLowerCase();
+
+  if (/\b(female|wife|woman|lady|mother|mom|she|her)\b/.test(haystack)) return "marin";
+  if (/\b(older|senior|authority|stern|terse|skeptical|impatient|direct)\b/.test(haystack)) {
+    return /\b(female|wife|woman|lady|mother|mom|she|her)\b/.test(haystack) ? "sage" : "echo";
+  }
+  if (/\b(friendly|chatty|warm|talkative|neighborly)\b/.test(haystack)) return "coral";
+  return "cedar";
+}
+
+function buildRealtimeInstructions(personaPrompt: string, contextPrompt: string): string {
+  const scenarioBlock = contextPrompt
+    ? `\n\n--- SCENARIO CONTEXT ---\n${contextPrompt}`
+    : "";
+
+  return `${personaPrompt}${scenarioBlock}
+
+--- ROLEPLAY RULES ---
+You are the homeowner/customer in a door-to-door pest control sales practice.
+Stay fully in character as the selected homeowner. Do not coach, score, explain the exercise, or break character during the roleplay.
+Speak naturally with realistic hesitation, interruptions, short answers, and objections.
+Raise the target objections from the scenario when it fits the conversation.
+Let the sales rep practice their word tracks. Push back when a real homeowner would push back.
+End only when the rep clearly wraps up the conversation or the user taps End in the app.`;
+}
+
 export async function POST(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -60,54 +110,68 @@ export async function POST(request: Request) {
   // Get persona
   const { data: persona } = await admin
     .from("roleplay_personas")
-    .select("id, name, system_prompt, voice_id")
+    .select("id, name, description, personality, system_prompt, voice_id")
     .eq("id", personaId)
     .single();
 
   if (!persona) return NextResponse.json({ error: "Persona not found" }, { status: 404 });
 
-  // Build the full system prompt
-  const fullPrompt = contextPrompt
-    ? `${persona.system_prompt}\n\n--- SCENARIO CONTEXT ---\n${contextPrompt}`
-    : persona.system_prompt;
-
-  // Create ElevenLabs Conversational AI agent
-  const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
-  if (!elevenLabsKey) {
-    return NextResponse.json({ error: "ElevenLabs not configured" }, { status: 500 });
+  const openAIKey = process.env.OPENAI_API_KEY;
+  if (!openAIKey) {
+    return NextResponse.json({ error: "OpenAI Realtime not configured: OPENAI_API_KEY missing" }, { status: 500 });
   }
 
-  const agentRes = await fetch("https://api.elevenlabs.io/v1/convai/conversation", {
+  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime";
+  const voice = pickOpenAIVoice(persona);
+  const instructions = buildRealtimeInstructions(persona.system_prompt, contextPrompt);
+
+  const secretRes = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
     method: "POST",
     headers: {
-      "xi-api-key": elevenLabsKey,
+      Authorization: `Bearer ${openAIKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      agent: {
-        prompt: {
-          prompt: fullPrompt,
-        },
-        first_message: "Hello?",
-        language: "en",
+      expires_after: {
+        anchor: "created_at",
+        seconds: 600,
       },
-      tts: {
-        voice_id: persona.voice_id,
+      session: {
+        type: "realtime",
+        model,
+        instructions,
+        output_modalities: ["audio"],
+        audio: {
+          input: {
+            transcription: {
+              model: "gpt-4o-transcribe",
+              language: "en",
+            },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
+          output: {
+            voice,
+          },
+        },
       },
     }),
   });
 
-  if (!agentRes.ok) {
-    const errBody = await agentRes.text();
+  const secretData = await secretRes.json().catch(() => null) as OpenAIClientSecretResponse | null;
+  if (!secretRes.ok || !secretData?.value) {
+    const message = secretData?.error?.message ?? "Failed to create OpenAI Realtime client secret";
     return NextResponse.json(
-      { error: `ElevenLabs error: ${errBody}` },
+      { error: `OpenAI Realtime error: ${message}` },
       { status: 502 }
     );
   }
-
-  const agentData = await agentRes.json();
-  const conversationId = agentData.conversation_id;
-  const signedUrl = agentData.signed_url;
 
   // Create session record
   const { data: session, error } = await admin
@@ -118,7 +182,7 @@ export async function POST(request: Request) {
       scenario_id: scenarioId ?? null,
       persona_id: personaId,
       status: "active",
-      elevenlabs_conversation_id: conversationId,
+      elevenlabs_conversation_id: null,
     })
     .select("id")
     .single();
@@ -127,8 +191,11 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     sessionId: session?.id,
-    conversationId,
-    signedUrl,
+    provider: "openai-realtime",
+    model,
+    voice,
     personaName: persona.name,
+    clientSecret: secretData.value,
+    expiresAt: secretData.expires_at ?? Math.floor(Date.now() / 1000) + 600,
   });
 }

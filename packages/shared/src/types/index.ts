@@ -51,6 +51,7 @@ export type {
   ScenarioType,
   Difficulty,
   RoleplaySessionStatus,
+  VoiceProvider,
   PersonaPersonality,
   RoleplayPersona,
   RoleplayScenario,

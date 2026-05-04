@@ -6,6 +6,7 @@ const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   DEEPGRAM_API_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: z.string().min(1),
+  OPENAI_API_KEY: z.string().min(1).optional(),
   ELEVENLABS_API_KEY: z.string().min(1).optional(),
 });
 

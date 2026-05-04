@@ -1316,10 +1316,15 @@ DEEPGRAM_API_KEY=xxx
 # Anthropic
 ANTHROPIC_API_KEY=sk-ant-xxx
 
+# OpenAI Realtime roleplay
+OPENAI_API_KEY=sk-xxx
+OPENAI_REALTIME_MODEL=gpt-realtime
+
 # Webhook
 SUPABASE_WEBHOOK_SECRET=whsec_xxx         # Verify webhook signatures
 
 # Vercel Cron
+INTERNAL_API_SECRET=xxx                   # Protect internal processing endpoints
 CRON_SECRET=xxx                           # Protect cron endpoints
 ```
 

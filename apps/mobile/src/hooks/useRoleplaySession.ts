@@ -1,13 +1,20 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { AppState } from "react-native";
 import { apiPost } from "../services/api";
-import { AudioStreamService } from "../services/roleplay/AudioStreamService";
-import type { StreamStatus } from "../services/roleplay/AudioStreamService";
+import {
+  OpenAIRealtimeService,
+  type RoleplayTranscriptLine,
+  type StreamStatus,
+  type VoiceProvider,
+} from "../services/roleplay/OpenAIRealtimeService";
 
 export type RoleplayPhase = "idle" | "connecting" | "active" | "ending" | "completed" | "error";
 
 interface TranscriptLine {
   readonly role: "rep" | "customer";
   readonly text: string;
+  readonly startMs: number;
+  readonly endMs: number;
 }
 
 interface SessionResult {
@@ -26,9 +33,29 @@ export function useRoleplaySession() {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const streamRef = useRef<AudioStreamService | null>(null);
+  const streamRef = useRef<OpenAIRealtimeService | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
+  const phaseRef = useRef<RoleplayPhase>("idle");
+  const sessionIdRef = useRef<string | null>(null);
+  const transcriptRef = useRef<readonly TranscriptLine[]>([]);
+  const durationRef = useRef(0);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
 
   // Duration timer
   useEffect(() => {
@@ -58,26 +85,33 @@ export function useRoleplaySession() {
     try {
       const data = await apiPost<{
         sessionId: string;
-        conversationId: string;
-        signedUrl: string;
+        provider: VoiceProvider;
+        model: string;
+        voice: string;
         personaName: string;
+        clientSecret: string;
+        expiresAt: number;
       }>("/api/roleplay/sessions/start", {
         scenarioId: scenarioId ?? undefined,
         personaId: personaId ?? undefined,
       });
 
+      if (data.provider !== "openai-realtime") {
+        throw new Error(`Unsupported roleplay voice provider: ${data.provider}`);
+      }
+
       setSessionId(data.sessionId);
       setPersonaName(data.personaName);
 
       // Create audio stream
-      const stream = new AudioStreamService({
+      const stream = new OpenAIRealtimeService({
         onStatusChange: (status: StreamStatus) => {
           if (status === "connected") setPhase("active");
           if (status === "error") setPhase("error");
         },
         onAgentSpeaking: setAgentSpeaking,
-        onTranscript: (role, text) => {
-          setTranscript((prev) => [...prev, { role, text }]);
+        onTranscript: (line: RoleplayTranscriptLine) => {
+          setTranscript((prev) => [...prev, line]);
         },
         onError: (err) => {
           setErrorMessage(err);
@@ -86,7 +120,10 @@ export function useRoleplaySession() {
       });
 
       streamRef.current = stream;
-      await stream.connect(data.signedUrl);
+      await stream.connect({
+        clientSecret: data.clientSecret,
+        model: data.model,
+      });
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to start session");
       setPhase("error");
@@ -94,7 +131,8 @@ export function useRoleplaySession() {
   }, []);
 
   const endSession = useCallback(async () => {
-    if (!sessionId) return;
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) return;
     setPhase("ending");
 
     // Disconnect audio
@@ -105,7 +143,11 @@ export function useRoleplaySession() {
 
     try {
       const data = await apiPost<SessionResult>(
-        `/api/roleplay/sessions/${sessionId}/end`
+        `/api/roleplay/sessions/${activeSessionId}/end`,
+        {
+          transcript: transcriptRef.current,
+          durationSeconds: durationRef.current,
+        }
       );
       setResult(data);
       setPhase("completed");
@@ -113,7 +155,7 @@ export function useRoleplaySession() {
       setErrorMessage(err instanceof Error ? err.message : "Failed to end session");
       setPhase("error");
     }
-  }, [sessionId]);
+  }, []);
 
   const reset = useCallback(() => {
     setPhase("idle");
@@ -134,6 +176,16 @@ export function useRoleplaySession() {
       }
     };
   }, []);
+
+  // Do not keep an invisible live voice session running after lock/background.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" && phaseRef.current === "active") {
+        void endSession();
+      }
+    });
+    return () => sub.remove();
+  }, [endSession]);
 
   return {
     phase,
