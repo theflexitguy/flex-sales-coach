@@ -25,6 +25,8 @@ const config: ExpoConfig = {
       UIBackgroundModes: ["audio", "location"],
       NSMicrophoneUsageDescription:
         "Flex Sales Coach records your sales conversations for AI-powered coaching analysis.",
+      NSCameraUsageDescription:
+        "Koachr may access the camera through its voice practice connection library, but roleplay practice uses audio only.",
       NSLocationWhenInUseUsageDescription:
         "Koachr uses your location while recording to separate door-to-door conversations and tag where they happened.",
       NSLocationAlwaysAndWhenInUseUsageDescription:
@@ -33,7 +35,7 @@ const config: ExpoConfig = {
         "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "31",
+    buildNumber: "32",
   },
   android: {
     adaptiveIcon: {
