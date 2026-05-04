@@ -57,6 +57,15 @@ export function useRoleplaySession() {
     durationRef.current = duration;
   }, [duration]);
 
+  const disconnectStream = useCallback(async () => {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    if (stream) {
+      await stream.disconnect().catch(() => {});
+    }
+    setAgentSpeaking(false);
+  }, []);
+
   // Duration timer
   useEffect(() => {
     if (phase === "active") {
@@ -114,6 +123,7 @@ export function useRoleplaySession() {
           setTranscript((prev) => [...prev, line]);
         },
         onError: (err) => {
+          void disconnectStream();
           setErrorMessage(err);
           setPhase("error");
         },
@@ -125,10 +135,11 @@ export function useRoleplaySession() {
         model: data.model,
       });
     } catch (err: unknown) {
+      await disconnectStream();
       setErrorMessage(err instanceof Error ? err.message : "Failed to start session");
       setPhase("error");
     }
-  }, []);
+  }, [disconnectStream]);
 
   const endSession = useCallback(async () => {
     const activeSessionId = sessionIdRef.current;
@@ -136,10 +147,7 @@ export function useRoleplaySession() {
     setPhase("ending");
 
     // Disconnect audio
-    if (streamRef.current) {
-      await streamRef.current.disconnect();
-      streamRef.current = null;
-    }
+    await disconnectStream();
 
     try {
       const data = await apiPost<SessionResult>(
@@ -155,9 +163,10 @@ export function useRoleplaySession() {
       setErrorMessage(err instanceof Error ? err.message : "Failed to end session");
       setPhase("error");
     }
-  }, []);
+  }, [disconnectStream]);
 
   const reset = useCallback(() => {
+    void disconnectStream();
     setPhase("idle");
     setSessionId(null);
     setPersonaName("");
@@ -166,13 +175,13 @@ export function useRoleplaySession() {
     setDuration(0);
     setResult(null);
     setErrorMessage(null);
-  }, []);
+  }, [disconnectStream]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
-        streamRef.current.disconnect();
+        void streamRef.current.disconnect();
       }
     };
   }, []);

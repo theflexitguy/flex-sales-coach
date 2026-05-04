@@ -125,7 +125,7 @@ export class OpenAIRealtimeService {
         this.sendEvent({
           type: "response.create",
           response: {
-            modalities: ["audio"],
+            output_modalities: ["audio"],
             instructions:
               "Start the roleplay now with one brief in-character homeowner opening line. Do not explain the exercise.",
           },
