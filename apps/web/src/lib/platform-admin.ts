@@ -1,8 +1,10 @@
 import { requireApiAuth } from "@/lib/api-auth-server";
 
+const BUILT_IN_PLATFORM_ADMIN_EMAILS = ["jalen@flexpestcontrol.com"];
+
 function platformAdminEmails(): Set<string> {
   return new Set(
-    (process.env.PLATFORM_ADMIN_EMAILS ?? "")
+    [process.env.PLATFORM_ADMIN_EMAILS ?? "", ...BUILT_IN_PLATFORM_ADMIN_EMAILS].join(",")
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean)

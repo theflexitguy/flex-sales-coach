@@ -142,7 +142,7 @@ export function SettingsPanel({
     setCreating(true);
     const res = await fetch("/api/team/invite", { method: "POST" });
     const data = await res.json();
-    if (data.invite) setInvites((prev) => [data.invite, ...prev]);
+    if (data.invite) setInvites([data.invite]);
     setCreating(false);
   }
 
@@ -470,14 +470,14 @@ export function SettingsPanel({
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-white">Invite Reps</h2>
-            <p className="text-sm text-zinc-400">Share an invite code so reps can join your team</p>
+            <p className="text-sm text-zinc-400">Share or regenerate your team&apos;s single rep invite code</p>
           </div>
           <button
             onClick={createInvite}
             disabled={creating}
             className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
           >
-            {creating ? "Creating..." : "Generate Code"}
+            {creating ? "Saving..." : invites.length > 0 ? "Regenerate Code" : "Generate Code"}
           </button>
         </div>
 
