@@ -32,7 +32,33 @@ interface AssignmentRep {
   managerIds: string[];
 }
 
-export function SettingsPanel({ user }: { user: UserProfile }) {
+interface PlatformTeam {
+  id: string;
+  name: string;
+  managerName: string | null;
+  managerEmail: string | null;
+  memberCount: number;
+  latestInvite: Invite | null;
+  createdAt: string;
+}
+
+interface CreatedTeamResult {
+  team: PlatformTeam;
+  manager: {
+    email: string;
+    fullName: string;
+    temporaryPassword: string | null;
+  };
+  invite: Invite;
+}
+
+export function SettingsPanel({
+  user,
+  isPlatformAdmin = false,
+}: {
+  user: UserProfile;
+  isPlatformAdmin?: boolean;
+}) {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [creating, setCreating] = useState(false);
@@ -40,6 +66,14 @@ export function SettingsPanel({ user }: { user: UserProfile }) {
   const [reps, setReps] = useState<AssignmentRep[]>([]);
   const [assignmentLoading, setAssignmentLoading] = useState(true);
   const [savingAssignment, setSavingAssignment] = useState<string | null>(null);
+  const [platformTeams, setPlatformTeams] = useState<PlatformTeam[]>([]);
+  const [platformLoading, setPlatformLoading] = useState(isPlatformAdmin);
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [managerEmail, setManagerEmail] = useState("");
+  const [managerFullName, setManagerFullName] = useState("");
+  const [platformError, setPlatformError] = useState<string | null>(null);
+  const [createdTeam, setCreatedTeam] = useState<CreatedTeamResult | null>(null);
 
   useEffect(() => {
     fetch("/api/team/invite").then((r) => r.json()).then((d) => setInvites(d.invites ?? []));
@@ -52,7 +86,13 @@ export function SettingsPanel({ user }: { user: UserProfile }) {
         })
         .finally(() => setAssignmentLoading(false));
     }
-  }, [user.role]);
+    if (isPlatformAdmin) {
+      fetch("/api/platform/teams")
+        .then((r) => r.json())
+        .then((d) => setPlatformTeams(d.teams ?? []))
+        .finally(() => setPlatformLoading(false));
+    }
+  }, [user.role, isPlatformAdmin]);
 
   async function toggleAssignment(repId: string, managerId: string, isCurrentlyAssigned: boolean) {
     setSavingAssignment(repId);
@@ -87,6 +127,29 @@ export function SettingsPanel({ user }: { user: UserProfile }) {
     setCreating(false);
   }
 
+  async function createCustomerTeam() {
+    setCreatingTeam(true);
+    setPlatformError(null);
+    setCreatedTeam(null);
+    const res = await fetch("/api/platform/teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamName, managerEmail, managerFullName }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setPlatformError(data.error ?? "Failed to create team");
+      setCreatingTeam(false);
+      return;
+    }
+    setCreatedTeam(data);
+    setPlatformTeams((prev) => [data.team, ...prev]);
+    setTeamName("");
+    setManagerEmail("");
+    setManagerFullName("");
+    setCreatingTeam(false);
+  }
+
   return (
     <div className="space-y-8 max-w-3xl">
       <div>
@@ -116,6 +179,116 @@ export function SettingsPanel({ user }: { user: UserProfile }) {
           </div>
         </div>
       </div>
+
+      {isPlatformAdmin && (
+        <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 p-6 space-y-5">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Platform Teams</h2>
+            <p className="text-sm text-zinc-400">
+              Create a separate customer tenant with its own manager, reps, invite codes, and isolated team data.
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <label className="text-xs text-zinc-500">Team name</label>
+              <input
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder="XYZ Pest Control"
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Manager name</label>
+              <input
+                value={managerFullName}
+                onChange={(e) => setManagerFullName(e.target.value)}
+                placeholder="Jane Manager"
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Manager email</label>
+              <input
+                value={managerEmail}
+                onChange={(e) => setManagerEmail(e.target.value)}
+                placeholder="manager@example.com"
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={createCustomerTeam}
+            disabled={creatingTeam || !teamName || !managerFullName || !managerEmail}
+            className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
+          >
+            {creatingTeam ? "Creating..." : "Create Customer Team"}
+          </button>
+
+          {platformError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-950/20 px-4 py-3 text-sm text-red-300">
+              {platformError}
+            </div>
+          )}
+
+          {createdTeam && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-4 py-3">
+              <p className="text-sm font-medium text-emerald-300">
+                Created {createdTeam.team.name}
+              </p>
+              <p className="mt-1 text-sm text-zinc-300">
+                Manager login: <span className="font-mono">{createdTeam.manager.email}</span>
+              </p>
+              {createdTeam.manager.temporaryPassword && (
+                <p className="mt-1 text-sm text-zinc-300">
+                  Temporary password:{" "}
+                  <span className="font-mono text-emerald-300">
+                    {createdTeam.manager.temporaryPassword}
+                  </span>
+                </p>
+              )}
+              <p className="mt-1 text-sm text-zinc-300">
+                Rep invite code: <span className="font-mono text-sky-300">{createdTeam.invite.code}</span>
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {platformLoading ? (
+              <p className="text-sm text-zinc-500">Loading teams...</p>
+            ) : platformTeams.length === 0 ? (
+              <p className="text-sm text-zinc-500">No customer teams yet</p>
+            ) : (
+              platformTeams.map((team) => (
+                <div
+                  key={team.id}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-4 py-3"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">{team.name}</p>
+                      <p className="text-xs text-zinc-500">
+                        {team.managerName ?? "No manager"} · {team.managerEmail ?? "no email"}
+                      </p>
+                    </div>
+                    <span className="text-xs text-zinc-500">
+                      {team.memberCount} member{team.memberCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {team.latestInvite && (
+                    <div className="mt-2 flex items-center justify-between rounded-md bg-zinc-900 px-3 py-2">
+                      <span className="text-xs text-zinc-500">Latest invite</span>
+                      <span className="font-mono text-sm text-sky-400">{team.latestInvite.code}</span>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Invite Reps */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 space-y-4">

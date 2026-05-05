@@ -1326,6 +1326,9 @@ SUPABASE_WEBHOOK_SECRET=whsec_xxx         # Verify webhook signatures
 # Vercel Cron
 INTERNAL_API_SECRET=xxx                   # Protect internal processing endpoints
 CRON_SECRET=xxx                           # Protect cron endpoints
+
+# Platform tenancy
+PLATFORM_ADMIN_EMAILS=owner@example.com   # Comma-separated users allowed to create customer teams
 ```
 
 ---

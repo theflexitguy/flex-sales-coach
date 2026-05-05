@@ -8,6 +8,7 @@ const serverEnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1).optional(),
   ELEVENLABS_API_KEY: z.string().min(1).optional(),
+  PLATFORM_ADMIN_EMAILS: z.string().optional(),
 });
 
 const clientEnvSchema = z.object({

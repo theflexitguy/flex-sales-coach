@@ -149,6 +149,7 @@ This phase transforms the stock scaffold into a working monorepo with auth, data
   - `/Users/jalenbrown/Projects/flex-sales-coach/apps/web/.env.local.example` -- template with all required vars
   - `/Users/jalenbrown/Projects/flex-sales-coach/apps/web/src/lib/env.ts` -- runtime validation of env vars using Zod, fail-fast at startup
 - **Required env vars**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `INTERNAL_API_SECRET`, `CRON_SECRET`
+- **Optional platform admin env var**: `PLATFORM_ADMIN_EMAILS` -- comma-separated emails allowed to create isolated customer teams
 - **npm packages**: `zod`
 
 #### Step 1.6: Shared Types + Validation Schemas
