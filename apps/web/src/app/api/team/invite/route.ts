@@ -7,6 +7,21 @@ function generateInviteCode(): string {
   return randomBytes(4).toString("hex").toUpperCase();
 }
 
+async function getActiveRepCount(admin: ReturnType<typeof createAdmin>, teamId: string) {
+  const { count, error } = await admin
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("team_id", teamId)
+    .eq("role", "rep")
+    .eq("is_active", true);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return count ?? 0;
+}
+
 export async function GET() {
   const supabase = await createServer();
   const { data: { user } } = await supabase.auth.getUser();
@@ -14,6 +29,7 @@ export async function GET() {
 
   const { data: profile } = await supabase.from("profiles").select("team_id, role").eq("id", user.id).single();
   if (profile?.role !== "manager") return NextResponse.json({ error: "Managers only" }, { status: 403 });
+  if (!profile.team_id) return NextResponse.json({ invites: [] });
 
   const { data: invites } = await supabase
     .from("team_invites")
@@ -22,7 +38,12 @@ export async function GET() {
     .order("created_at", { ascending: false })
     .limit(1);
 
-  return NextResponse.json({ invites: invites ?? [] });
+  const admin = createAdmin();
+  const activeRepCount = await getActiveRepCount(admin, profile.team_id);
+
+  return NextResponse.json({
+    invites: (invites ?? []).map((invite) => ({ ...invite, uses: activeRepCount })),
+  });
 }
 
 export async function POST() {
@@ -32,8 +53,10 @@ export async function POST() {
 
   const { data: profile } = await supabase.from("profiles").select("team_id, role").eq("id", user.id).single();
   if (profile?.role !== "manager") return NextResponse.json({ error: "Managers only" }, { status: 403 });
+  if (!profile.team_id) return NextResponse.json({ error: "Manager has no team" }, { status: 400 });
 
   const admin = createAdmin();
+  const activeRepCount = await getActiveRepCount(admin, profile.team_id);
   let invite = null;
 
   for (let attempt = 0; attempt < 5 && !invite; attempt += 1) {
@@ -45,6 +68,7 @@ export async function POST() {
           code: generateInviteCode(),
           created_by: user.id,
           max_uses: null,
+          uses: activeRepCount,
           expires_at: null,
         },
         { onConflict: "team_id" }

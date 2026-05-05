@@ -115,6 +115,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     teams: (teams ?? []).map((team) => {
       const manager = team.manager_id ? managerById.get(team.manager_id) : null;
+      const repCount = repCountByTeam.get(team.id) ?? 0;
+      const latestInvite = latestInviteByTeam.get(team.id) ?? null;
       return {
         id: team.id,
         name: team.name,
@@ -122,14 +124,14 @@ export async function GET(request: Request) {
         managerName: manager?.full_name ?? null,
         managerEmail: manager?.email ?? null,
         memberCount: memberCountByTeam.get(team.id) ?? 0,
-        repCount: repCountByTeam.get(team.id) ?? 0,
+        repCount,
         ...buildBillingFields({
-          repCount: repCountByTeam.get(team.id) ?? 0,
+          repCount,
           includedReps: Number(team.included_reps ?? 10),
           includedRepPriceCents: Number(team.included_rep_price_cents ?? 0),
           extraRepPriceCents: Number(team.extra_rep_price_cents ?? 0),
         }),
-        latestInvite: latestInviteByTeam.get(team.id) ?? null,
+        latestInvite: latestInvite ? { ...latestInvite, uses: repCount } : null,
         createdAt: team.created_at,
       };
     }),
