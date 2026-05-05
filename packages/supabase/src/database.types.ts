@@ -19,6 +19,7 @@ export interface Database {
           email: string;
           full_name: string;
           role: "rep" | "manager";
+          playbook_role: string;
           team_id: string | null;
           avatar_url: string | null;
           is_active: boolean;
@@ -30,6 +31,7 @@ export interface Database {
           email: string;
           full_name: string;
           role?: "rep" | "manager";
+          playbook_role?: string;
           team_id?: string | null;
           avatar_url?: string | null;
           is_active?: boolean;
@@ -41,6 +43,7 @@ export interface Database {
           email?: string;
           full_name?: string;
           role?: "rep" | "manager";
+          playbook_role?: string;
           team_id?: string | null;
           avatar_url?: string | null;
           is_active?: boolean;

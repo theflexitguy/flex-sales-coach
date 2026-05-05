@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
+import { normalizeRoleTrack } from "@/lib/role-tracks";
 
 /** GET: list all reps and managers on the team with current assignments */
 export async function GET(request: Request) {
@@ -16,7 +17,7 @@ export async function GET(request: Request) {
   const [{ data: profiles }, { data: assignments }] = await Promise.all([
     admin
       .from("profiles")
-      .select("id, full_name, email, role")
+      .select("id, full_name, email, role, playbook_role")
       .eq("team_id", teamId)
       .eq("is_active", true)
       .order("full_name"),
@@ -37,11 +38,17 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({
-    managers: managers.map((m) => ({ id: m.id, fullName: m.full_name })),
+    managers: managers.map((m) => ({
+      id: m.id,
+      fullName: m.full_name,
+      email: m.email,
+      playbookRole: m.playbook_role,
+    })),
     reps: reps.map((r) => ({
       id: r.id,
       fullName: r.full_name,
       email: r.email,
+      playbookRole: r.playbook_role,
       managerIds: repAssignments[r.id] ?? [],
     })),
   });
@@ -55,13 +62,69 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Managers only" }, { status: 403 });
   }
 
-  const { repId, managerId, action } = await request.json();
-  if (!repId || !managerId || !action) {
-    return NextResponse.json({ error: "repId, managerId, and action (assign|unassign) required" }, { status: 400 });
+  const body = await request.json().catch(() => ({}));
+  const { repId, managerId, action } = body;
+  if (!action) {
+    return NextResponse.json({ error: "action is required" }, { status: 400 });
   }
 
   const admin = createAdmin();
   const teamId = auth.profile.team_id;
+
+  if (action === "set-playbook-role") {
+    const { userId, playbookRole } = body;
+    if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
+
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id, team_id, role")
+      .eq("id", userId)
+      .eq("team_id", teamId)
+      .single();
+
+    if (!profile) return NextResponse.json({ error: "User not found on this team" }, { status: 404 });
+
+    const nextRoleTrack = normalizeRoleTrack(playbookRole);
+    const { error } = await admin
+      .from("profiles")
+      .update({ playbook_role: nextRoleTrack })
+      .eq("id", userId);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, playbookRole: nextRoleTrack });
+  }
+
+  if (action === "set-account-role") {
+    const { userId, accountRole } = body;
+    if (!userId || !["rep", "manager"].includes(accountRole)) {
+      return NextResponse.json({ error: "userId and accountRole (rep|manager) required" }, { status: 400 });
+    }
+    if (userId === auth.user.id && accountRole === "rep") {
+      return NextResponse.json({ error: "You cannot demote your own manager account" }, { status: 400 });
+    }
+
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id, team_id")
+      .eq("id", userId)
+      .eq("team_id", teamId)
+      .single();
+
+    if (!profile) return NextResponse.json({ error: "User not found on this team" }, { status: 404 });
+
+    const { error } = await admin.from("profiles").update({ role: accountRole }).eq("id", userId);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    if (accountRole === "rep") {
+      await admin.from("manager_rep_assignments").delete().eq("manager_id", userId);
+    }
+
+    return NextResponse.json({ success: true, accountRole });
+  }
+
+  if (!repId || !managerId) {
+    return NextResponse.json({ error: "repId and managerId required" }, { status: 400 });
+  }
 
   // Verify both users are on the same team
   const { data: profiles } = await admin

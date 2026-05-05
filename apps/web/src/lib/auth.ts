@@ -15,7 +15,7 @@ export async function getUser(): Promise<UserProfile | null> {
     .select("*")
     .eq("id", user.id)
     .single() as unknown as { data: {
-      id: string; email: string; full_name: string; role: string;
+      id: string; email: string; full_name: string; role: string; playbook_role?: string;
       team_id: string | null; avatar_url: string | null;
       is_active: boolean; created_at: string; updated_at: string;
     } | null };
@@ -27,6 +27,7 @@ export async function getUser(): Promise<UserProfile | null> {
     email: profile.email,
     fullName: profile.full_name,
     role: profile.role as UserRole,
+    playbookRole: profile.playbook_role,
     teamId: profile.team_id ?? "",
     avatarUrl: profile.avatar_url,
     isActive: profile.is_active,

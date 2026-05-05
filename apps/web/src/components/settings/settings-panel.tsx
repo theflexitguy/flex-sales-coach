@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { UserProfile } from "@flex/shared";
+import { ROLE_TRACKS, roleTrackLabel } from "@/lib/role-tracks";
 
 interface Invite {
   id: string;
@@ -15,12 +16,15 @@ interface Invite {
 interface AssignmentManager {
   id: string;
   fullName: string;
+  email: string;
+  playbookRole: string;
 }
 
 interface AssignmentRep {
   id: string;
   fullName: string;
   email: string;
+  playbookRole: string;
   managerIds: string[];
 }
 
@@ -134,6 +138,51 @@ export function SettingsPanel({
           return { ...r, managerIds: newManagerIds };
         })
       );
+    }
+    setSavingAssignment(null);
+  }
+
+  async function updateRepPlaybookRole(repId: string, playbookRole: string) {
+    setSavingAssignment(repId);
+    const res = await fetch("/api/team/assignments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: repId,
+        playbookRole,
+        action: "set-playbook-role",
+      }),
+    });
+    if (res.ok) {
+      setReps((prev) =>
+        prev.map((rep) => (rep.id === repId ? { ...rep, playbookRole } : rep))
+      );
+    }
+    setSavingAssignment(null);
+  }
+
+  async function promoteRepToManager(rep: AssignmentRep) {
+    setSavingAssignment(rep.id);
+    const res = await fetch("/api/team/assignments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: rep.id,
+        accountRole: "manager",
+        action: "set-account-role",
+      }),
+    });
+    if (res.ok) {
+      setReps((prev) => prev.filter((r) => r.id !== rep.id));
+      setManagers((prev) => [
+        ...prev,
+        {
+          id: rep.id,
+          fullName: rep.fullName,
+          email: rep.email,
+          playbookRole: rep.playbookRole,
+        },
+      ].sort((a, b) => a.fullName.localeCompare(b.fullName)));
     }
     setSavingAssignment(null);
   }
@@ -524,7 +573,7 @@ export function SettingsPanel({
           <div>
             <h2 className="text-lg font-semibold text-white">Rep Assignments</h2>
             <p className="text-sm text-zinc-400">
-              Assign reps to managers. Managers only see data from their assigned reps.
+              Assign reps to managers and set the playbook role used for AI analysis.
               Unassigned reps are visible to all managers.
             </p>
           </div>
@@ -548,8 +597,28 @@ export function SettingsPanel({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-white truncate">{rep.fullName}</p>
                     <p className="text-xs text-zinc-500 truncate">{rep.email}</p>
+                    <p className="text-xs text-sky-400 mt-1">{roleTrackLabel(rep.playbookRole)}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <select
+                      value={rep.playbookRole}
+                      onChange={(e) => updateRepPlaybookRole(rep.id, e.target.value)}
+                      disabled={savingAssignment === rep.id}
+                      className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-sky-500 disabled:opacity-50"
+                    >
+                      {ROLE_TRACKS.map((role) => (
+                        <option key={role.value} value={role.value}>
+                          {role.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => promoteRepToManager(rep)}
+                      disabled={savingAssignment === rep.id}
+                      className="text-xs px-3 py-1.5 rounded-full font-medium border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                    >
+                      Make Manager
+                    </button>
                     {managers.map((mgr) => {
                       const isAssigned = rep.managerIds.includes(mgr.id);
                       return (
@@ -576,8 +645,8 @@ export function SettingsPanel({
           <div className="rounded-lg bg-zinc-800/50 px-4 py-3">
             <p className="text-sm text-zinc-400">
               <span className="font-medium text-zinc-300">How it works:</span>{" "}
-              Click a manager name to assign them to a rep. A rep can have multiple managers.
-              Reps with no assignment are visible to everyone.
+              Use Make Manager to promote a team member, pick each rep&apos;s playbook role,
+              then click manager names to assign visibility. Reps with no assignment are visible to everyone.
             </p>
           </div>
         </div>

@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { ROLE_TRACKS, roleTrackLabel } from "@/lib/role-tracks";
 
 interface Playbook {
   id: string;
   name: string;
   description: string | null;
+  target_role: string;
   sections: Array<{ name: string; description: string; weight: number }>;
   scoring: Record<string, unknown>;
   is_active: boolean;
@@ -18,6 +20,7 @@ export function PlaybooksView() {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [targetRole, setTargetRole] = useState("door_to_door_sales");
   const [sections, setSections] = useState([
     { name: "Introduction", description: "Greeting and rapport", weight: 15 },
     { name: "Discovery", description: "Identify needs and pain points", weight: 20 },
@@ -42,6 +45,7 @@ export function PlaybooksView() {
       body: JSON.stringify({
         name,
         description,
+        targetRole,
         sections,
         scoring: { totalWeight: sections.reduce((sum, s) => sum + s.weight, 0) },
       }),
@@ -52,6 +56,7 @@ export function PlaybooksView() {
       setShowCreate(false);
       setName("");
       setDescription("");
+      setTargetRole("door_to_door_sales");
     }
     setSaving(false);
   }
@@ -88,6 +93,14 @@ export function PlaybooksView() {
           <div className="space-y-3">
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Playbook name"
               className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm text-white placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none" />
+            <select value={targetRole} onChange={(e) => setTargetRole(e.target.value)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm text-white focus:border-sky-500 focus:outline-none">
+              {ROLE_TRACKS.map((role) => (
+                <option key={role.value} value={role.value}>
+                  {role.label}
+                </option>
+              ))}
+            </select>
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" rows={2}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm text-white placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none resize-none" />
           </div>
@@ -141,6 +154,7 @@ export function PlaybooksView() {
                 <div>
                   <h3 className="text-base font-semibold text-white">{pb.name}</h3>
                   {pb.description && <p className="text-sm text-zinc-400 mt-0.5">{pb.description}</p>}
+                  <p className="text-xs text-sky-400 mt-1">{roleTrackLabel(pb.target_role)}</p>
                 </div>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                   pb.is_active ? "bg-green-500/10 text-green-400" : "bg-zinc-500/10 text-zinc-400"

@@ -3,12 +3,13 @@ import { createAdmin } from "@flex/supabase/admin";
 import { isInternalCall } from "@/lib/api-auth-server";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { roleTrackLabel } from "@/lib/role-tracks";
 
-const PROMPT_VERSION = "1.0.0";
+const PROMPT_VERSION = "1.1.0";
 
-const SYSTEM_PROMPT = `You are an expert door-to-door sales coach AI. You analyze sales call transcripts and provide detailed, actionable coaching feedback.
+const SYSTEM_PROMPT = `You are an expert sales and service coaching AI. You analyze customer conversation transcripts and provide detailed, actionable coaching feedback.
 
-You will receive a transcript of a door-to-door sales conversation with speaker labels [rep] and [customer].
+You will receive a transcript with speaker labels [rep] and [customer]. You may also receive a role-specific playbook. If a playbook is provided, grade the rep against that playbook's role, process, sections, and scoring expectations rather than a one-size-fits-all rubric.
 
 Analyze the conversation and return a JSON object with this exact structure:
 
@@ -57,9 +58,36 @@ Scoring guidelines:
 - 40-59 (needs_improvement): Significant gaps in sales technique
 - 0-39 (poor): Fundamental issues with approach
 
-Be specific in your feedback. Reference exact things the rep said. Suggestions should be actionable and practical for door-to-door pest control sales.
+Be specific in your feedback. Reference exact things the rep said. Suggestions should be actionable and practical for the rep's assigned role.
 
 Return ONLY valid JSON, no markdown or explanation.`;
+
+function buildPlaybookContext({
+  roleTrack,
+  playbook,
+}: {
+  roleTrack: string;
+  playbook: null | {
+    name: string;
+    description: string | null;
+    sections: unknown;
+    scoring: unknown;
+  };
+}) {
+  const roleLabel = roleTrackLabel(roleTrack);
+  if (!playbook) {
+    return `Assigned rep role: ${roleLabel}\nNo active role-specific playbook was found. Use the default coaching rubric, but keep feedback appropriate to this role.`;
+  }
+
+  return [
+    `Assigned rep role: ${roleLabel}`,
+    `Active playbook: ${playbook.name}`,
+    playbook.description ? `Playbook description: ${playbook.description}` : null,
+    `Playbook sections: ${JSON.stringify(playbook.sections ?? [])}`,
+    `Playbook scoring: ${JSON.stringify(playbook.scoring ?? {})}`,
+    "Grade this conversation against the active playbook wherever it differs from the default rubric.",
+  ].filter(Boolean).join("\n");
+}
 
 export async function POST(request: Request) {
   if (!isInternalCall(request)) {
@@ -91,13 +119,40 @@ export async function POST(request: Request) {
       throw new Error("No transcript found for this call");
     }
 
+    const { data: call } = await supabase
+      .from("calls")
+      .select("rep_id, team_id")
+      .eq("id", callId)
+      .single();
+
+    const { data: repProfile } = call?.rep_id
+      ? await supabase
+          .from("profiles")
+          .select("playbook_role")
+          .eq("id", call.rep_id)
+          .single()
+      : { data: null };
+
+    const roleTrack = repProfile?.playbook_role ?? "door_to_door_sales";
+    const { data: playbook } = call?.team_id
+      ? await supabase
+          .from("playbooks")
+          .select("name, description, sections, scoring")
+          .eq("team_id", call.team_id)
+          .eq("target_role", roleTrack)
+          .eq("is_active", true)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : { data: null };
+
     // Call Claude via AI SDK
     const modelId = "claude-sonnet-4-20250514";
 
     const { text: responseText } = await generateText({
       model: anthropic(modelId),
       system: SYSTEM_PROMPT,
-      prompt: `Analyze this door-to-door sales call transcript:\n\n${transcript.full_text}`,
+      prompt: `${buildPlaybookContext({ roleTrack, playbook })}\n\nAnalyze this conversation transcript:\n\n${transcript.full_text}`,
       maxOutputTokens: 4096,
     });
 

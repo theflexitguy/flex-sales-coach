@@ -13,7 +13,7 @@ export async function requireApiAuth(request?: Request) {
     if (user) {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("id, full_name, email, role, team_id")
+        .select("id, full_name, email, role, playbook_role, team_id")
         .eq("id", user.id)
         .single();
       return { user, profile, supabase };

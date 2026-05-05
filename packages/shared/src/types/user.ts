@@ -5,6 +5,7 @@ export interface UserProfile {
   readonly email: string;
   readonly fullName: string;
   readonly role: UserRole;
+  readonly playbookRole?: string;
   readonly teamId: string;
   readonly avatarUrl: string | null;
   readonly isActive: boolean;
