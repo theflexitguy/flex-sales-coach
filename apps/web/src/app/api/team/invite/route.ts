@@ -19,7 +19,7 @@ export async function GET() {
   return NextResponse.json({ invites: invites ?? [] });
 }
 
-export async function POST(request: Request) {
+export async function POST() {
   const supabase = await createServer();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -33,8 +33,8 @@ export async function POST(request: Request) {
     team_id: profile.team_id,
     code,
     created_by: user.id,
-    max_uses: 10,
-    expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+    max_uses: null,
+    expires_at: null,
   }).select("*").single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

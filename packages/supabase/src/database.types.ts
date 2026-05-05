@@ -52,6 +52,9 @@ export interface Database {
           id: string;
           name: string;
           manager_id: string | null;
+          included_reps: number;
+          included_rep_price_cents: number;
+          extra_rep_price_cents: number;
           created_at: string;
           updated_at: string;
         };
@@ -59,12 +62,18 @@ export interface Database {
           id?: string;
           name: string;
           manager_id?: string | null;
+          included_reps?: number;
+          included_rep_price_cents?: number;
+          extra_rep_price_cents?: number;
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           name?: string;
           manager_id?: string | null;
+          included_reps?: number;
+          included_rep_price_cents?: number;
+          extra_rep_price_cents?: number;
           updated_at?: string;
         };
       };
@@ -310,7 +319,23 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      claim_team_invite: {
+        Args: {
+          p_user_id: string;
+          p_code: string;
+        };
+        Returns: {
+          team_id: string;
+          uses: number;
+          max_uses: number | null;
+          current_reps: number;
+          included_reps: number;
+          overage_reps: number;
+          estimated_monthly_cents: number;
+        }[];
+      };
+    };
     Enums: {
       user_role: "rep" | "manager";
       call_status:

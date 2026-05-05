@@ -7,17 +7,9 @@ interface Invite {
   id: string;
   code: string;
   uses: number;
-  max_uses: number;
+  max_uses: number | null;
   expires_at: string | null;
   created_at: string;
-}
-
-interface TeamMember {
-  id: string;
-  full_name: string;
-  email: string;
-  role: string;
-  is_active: boolean;
 }
 
 interface AssignmentManager {
@@ -38,6 +30,12 @@ interface PlatformTeam {
   managerName: string | null;
   managerEmail: string | null;
   memberCount: number;
+  repCount: number;
+  includedReps: number;
+  includedRepPriceCents: number;
+  extraRepPriceCents: number;
+  overageReps: number;
+  estimatedMonthlyCents: number;
   latestInvite: Invite | null;
   createdAt: string;
 }
@@ -52,6 +50,24 @@ interface CreatedTeamResult {
   invite: Invite;
 }
 
+function formatMoney(cents: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: cents % 100 === 0 ? 0 : 2,
+  }).format(cents / 100);
+}
+
+function dollarsToCents(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.round(parsed * 100));
+}
+
+function centsToDollars(value: number): string {
+  return (value / 100).toFixed(2);
+}
+
 export function SettingsPanel({
   user,
   isPlatformAdmin = false,
@@ -60,7 +76,6 @@ export function SettingsPanel({
   isPlatformAdmin?: boolean;
 }) {
   const [invites, setInvites] = useState<Invite[]>([]);
-  const [members, setMembers] = useState<TeamMember[]>([]);
   const [creating, setCreating] = useState(false);
   const [managers, setManagers] = useState<AssignmentManager[]>([]);
   const [reps, setReps] = useState<AssignmentRep[]>([]);
@@ -72,6 +87,10 @@ export function SettingsPanel({
   const [teamName, setTeamName] = useState("");
   const [managerEmail, setManagerEmail] = useState("");
   const [managerFullName, setManagerFullName] = useState("");
+  const [includedReps, setIncludedReps] = useState("10");
+  const [includedRepPrice, setIncludedRepPrice] = useState("0.00");
+  const [extraRepPrice, setExtraRepPrice] = useState("0.00");
+  const [savingTeamBilling, setSavingTeamBilling] = useState<string | null>(null);
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [createdTeam, setCreatedTeam] = useState<CreatedTeamResult | null>(null);
 
@@ -134,7 +153,14 @@ export function SettingsPanel({
     const res = await fetch("/api/platform/teams", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ teamName, managerEmail, managerFullName }),
+      body: JSON.stringify({
+        teamName,
+        managerEmail,
+        managerFullName,
+        includedReps: Number(includedReps),
+        includedRepPriceCents: dollarsToCents(includedRepPrice),
+        extraRepPriceCents: dollarsToCents(extraRepPrice),
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -147,7 +173,47 @@ export function SettingsPanel({
     setTeamName("");
     setManagerEmail("");
     setManagerFullName("");
+    setIncludedReps("10");
+    setIncludedRepPrice("0.00");
+    setExtraRepPrice("0.00");
     setCreatingTeam(false);
+  }
+
+  async function updateTeamBilling(team: PlatformTeam, patch: Partial<PlatformTeam>) {
+    setSavingTeamBilling(team.id);
+    setPlatformError(null);
+    const res = await fetch("/api/platform/teams", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teamId: team.id,
+        includedReps: patch.includedReps ?? team.includedReps,
+        includedRepPriceCents:
+          patch.includedRepPriceCents ?? team.includedRepPriceCents,
+        extraRepPriceCents: patch.extraRepPriceCents ?? team.extraRepPriceCents,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setPlatformError(data.error ?? "Failed to update team billing");
+      setSavingTeamBilling(null);
+      return;
+    }
+    setPlatformTeams((prev) =>
+      prev.map((team) =>
+        team.id === data.teamId
+          ? {
+              ...team,
+              includedReps: data.includedReps,
+              includedRepPriceCents: data.includedRepPriceCents,
+              extraRepPriceCents: data.extraRepPriceCents,
+              overageReps: data.overageReps,
+              estimatedMonthlyCents: data.estimatedMonthlyCents,
+            }
+          : team
+      )
+    );
+    setSavingTeamBilling(null);
   }
 
   return (
@@ -217,11 +283,44 @@ export function SettingsPanel({
                 className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
               />
             </div>
+            <div>
+              <label className="text-xs text-zinc-500">Included reps</label>
+              <input
+                value={includedReps}
+                onChange={(e) => setIncludedReps(e.target.value)}
+                type="number"
+                min={0}
+                max={500}
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Bundle $/rep</label>
+              <input
+                value={includedRepPrice}
+                onChange={(e) => setIncludedRepPrice(e.target.value)}
+                type="number"
+                min={0}
+                step="0.01"
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Overage $/rep</label>
+              <input
+                value={extraRepPrice}
+                onChange={(e) => setExtraRepPrice(e.target.value)}
+                type="number"
+                min={0}
+                step="0.01"
+                className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+              />
+            </div>
           </div>
 
           <button
             onClick={createCustomerTeam}
-            disabled={creatingTeam || !teamName || !managerFullName || !managerEmail}
+            disabled={creatingTeam || !teamName || !managerFullName || !managerEmail || includedReps === ""}
             className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
           >
             {creatingTeam ? "Creating..." : "Create Customer Team"}
@@ -252,6 +351,11 @@ export function SettingsPanel({
               <p className="mt-1 text-sm text-zinc-300">
                 Rep invite code: <span className="font-mono text-sky-300">{createdTeam.invite.code}</span>
               </p>
+              <p className="mt-1 text-sm text-zinc-300">
+                Plan: {createdTeam.team.includedReps} included reps at{" "}
+                {formatMoney(createdTeam.team.includedRepPriceCents)}/rep, then{" "}
+                {formatMoney(createdTeam.team.extraRepPriceCents)}/rep overage
+              </p>
             </div>
           )}
 
@@ -274,8 +378,79 @@ export function SettingsPanel({
                       </p>
                     </div>
                     <span className="text-xs text-zinc-500">
-                      {team.memberCount} member{team.memberCount === 1 ? "" : "s"}
+                      {team.repCount} active reps · {team.memberCount} member{team.memberCount === 1 ? "" : "s"}
                     </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-zinc-500">Included</p>
+                      <p className="text-sm text-white">
+                        {team.includedReps} reps at {formatMoney(team.includedRepPriceCents)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-zinc-500">Overage</p>
+                      <p className={team.overageReps > 0 ? "text-sm text-amber-300" : "text-sm text-zinc-300"}>
+                        {team.overageReps} reps at {formatMoney(team.extraRepPriceCents)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-zinc-500">Est. monthly</p>
+                      <p className="text-sm text-emerald-300">
+                        {formatMoney(team.estimatedMonthlyCents)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-zinc-500">Invite</p>
+                      <p className="text-sm text-zinc-300">No expiration</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <label className="text-xs text-zinc-500">Included reps</label>
+                    <input
+                      defaultValue={team.includedReps}
+                      type="number"
+                      min={0}
+                      max={500}
+                      className="w-20 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-white outline-none focus:border-sky-500"
+                      onBlur={(e) => {
+                        const value = Number(e.currentTarget.value);
+                        if (Number.isFinite(value) && value !== team.includedReps) {
+                          updateTeamBilling(team, { includedReps: value });
+                        }
+                      }}
+                    />
+                    <label className="text-xs text-zinc-500">Bundle $/rep</label>
+                    <input
+                      defaultValue={centsToDollars(team.includedRepPriceCents)}
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      className="w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-white outline-none focus:border-sky-500"
+                      onBlur={(e) => {
+                        const value = dollarsToCents(e.currentTarget.value);
+                        if (value !== team.includedRepPriceCents) {
+                          updateTeamBilling(team, { includedRepPriceCents: value });
+                        }
+                      }}
+                    />
+                    <label className="text-xs text-zinc-500">Overage $/rep</label>
+                    <input
+                      defaultValue={centsToDollars(team.extraRepPriceCents)}
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      className="w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-white outline-none focus:border-sky-500"
+                      onBlur={(e) => {
+                        const value = dollarsToCents(e.currentTarget.value);
+                        if (value !== team.extraRepPriceCents) {
+                          updateTeamBilling(team, { extraRepPriceCents: value });
+                        }
+                      }}
+                    />
+                    {savingTeamBilling === team.id && (
+                      <span className="text-xs text-zinc-500">Saving...</span>
+                    )}
                   </div>
                   {team.latestInvite && (
                     <div className="mt-2 flex items-center justify-between rounded-md bg-zinc-900 px-3 py-2">
@@ -318,15 +493,11 @@ export function SettingsPanel({
                     {inv.code}
                   </span>
                   <span className="text-xs text-zinc-500">
-                    {inv.uses}/{inv.max_uses} used
+                    {inv.max_uses === null ? `${inv.uses} used` : `${inv.uses}/${inv.max_uses} used`}
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  {inv.expires_at && (
-                    <span className="text-xs text-zinc-600">
-                      Expires {new Date(inv.expires_at).toLocaleDateString()}
-                    </span>
-                  )}
+                  <span className="text-xs text-zinc-600">No expiration</span>
                   <button
                     onClick={() => navigator.clipboard.writeText(inv.code)}
                     className="text-xs text-zinc-400 hover:text-white transition-colors"

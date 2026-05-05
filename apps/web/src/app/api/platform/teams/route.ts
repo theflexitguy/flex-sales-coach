@@ -11,6 +11,44 @@ function normalizeText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeWholeNumber(value: unknown, fallback: number, max: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.min(max, Math.floor(value)));
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.max(0, Math.min(max, Math.floor(parsed)));
+  }
+  return fallback;
+}
+
+function normalizeCents(value: unknown): number {
+  return normalizeWholeNumber(value, 0, 1000000);
+}
+
+function buildBillingFields({
+  repCount,
+  includedReps,
+  includedRepPriceCents,
+  extraRepPriceCents,
+}: {
+  repCount: number;
+  includedReps: number;
+  includedRepPriceCents: number;
+  extraRepPriceCents: number;
+}) {
+  const includedBillableReps = Math.min(repCount, includedReps);
+  const overageReps = Math.max(0, repCount - includedReps);
+  return {
+    includedReps,
+    includedRepPriceCents,
+    extraRepPriceCents,
+    overageReps,
+    estimatedMonthlyCents:
+      includedBillableReps * includedRepPriceCents + overageReps * extraRepPriceCents,
+  };
+}
+
 function generateInviteCode(): string {
   return randomBytes(4).toString("hex").toUpperCase();
 }
@@ -26,7 +64,9 @@ export async function GET(request: Request) {
   const admin = createAdmin();
   const { data: teams, error: teamsError } = await admin
     .from("teams")
-    .select("id, name, manager_id, created_at")
+    .select(
+      "id, name, manager_id, included_reps, included_rep_price_cents, extra_rep_price_cents, created_at"
+    )
     .order("created_at", { ascending: false });
 
   if (teamsError) {
@@ -40,7 +80,7 @@ export async function GET(request: Request) {
 
   const [{ data: members }, { data: managers }, { data: invites }] = await Promise.all([
     teamIds.length
-      ? admin.from("profiles").select("id, team_id").in("team_id", teamIds)
+      ? admin.from("profiles").select("id, team_id, role, is_active").in("team_id", teamIds)
       : Promise.resolve({ data: [] }),
     managerIds.length
       ? admin.from("profiles").select("id, full_name, email").in("id", managerIds)
@@ -56,9 +96,13 @@ export async function GET(request: Request) {
 
   const managerById = new Map((managers ?? []).map((manager) => [manager.id, manager]));
   const memberCountByTeam = new Map<string, number>();
+  const repCountByTeam = new Map<string, number>();
   for (const member of members ?? []) {
     if (!member.team_id) continue;
     memberCountByTeam.set(member.team_id, (memberCountByTeam.get(member.team_id) ?? 0) + 1);
+    if (member.role === "rep" && member.is_active) {
+      repCountByTeam.set(member.team_id, (repCountByTeam.get(member.team_id) ?? 0) + 1);
+    }
   }
 
   const latestInviteByTeam = new Map<string, NonNullable<typeof invites>[number]>();
@@ -78,6 +122,13 @@ export async function GET(request: Request) {
         managerName: manager?.full_name ?? null,
         managerEmail: manager?.email ?? null,
         memberCount: memberCountByTeam.get(team.id) ?? 0,
+        repCount: repCountByTeam.get(team.id) ?? 0,
+        ...buildBillingFields({
+          repCount: repCountByTeam.get(team.id) ?? 0,
+          includedReps: Number(team.included_reps ?? 10),
+          includedRepPriceCents: Number(team.included_rep_price_cents ?? 0),
+          extraRepPriceCents: Number(team.extra_rep_price_cents ?? 0),
+        }),
         latestInvite: latestInviteByTeam.get(team.id) ?? null,
         createdAt: team.created_at,
       };
@@ -93,6 +144,9 @@ export async function POST(request: Request) {
   const teamName = normalizeText(body.teamName);
   const managerEmail = normalizeEmail(body.managerEmail);
   const managerFullName = normalizeText(body.managerFullName);
+  const includedReps = normalizeWholeNumber(body.includedReps, 10, 500);
+  const includedRepPriceCents = normalizeCents(body.includedRepPriceCents);
+  const extraRepPriceCents = normalizeCents(body.extraRepPriceCents);
 
   if (!teamName || !managerEmail || !managerFullName) {
     return NextResponse.json(
@@ -148,8 +202,13 @@ export async function POST(request: Request) {
     .insert({
       name: teamName,
       manager_id: managerId,
+      included_reps: includedReps,
+      included_rep_price_cents: includedRepPriceCents,
+      extra_rep_price_cents: extraRepPriceCents,
     })
-    .select("id, name, manager_id, created_at")
+    .select(
+      "id, name, manager_id, included_reps, included_rep_price_cents, extra_rep_price_cents, created_at"
+    )
     .single();
 
   if (teamError || !team) {
@@ -185,8 +244,8 @@ export async function POST(request: Request) {
         team_id: team.id,
         code: generateInviteCode(),
         created_by: managerId,
-        max_uses: 25,
-        expires_at: new Date(Date.now() + 30 * 86400000).toISOString(),
+        max_uses: null,
+        expires_at: null,
       })
       .select("id, code, uses, max_uses, expires_at, created_at")
       .single();
@@ -209,6 +268,15 @@ export async function POST(request: Request) {
       managerName: managerFullName,
       managerEmail,
       memberCount: 1,
+      repCount: 0,
+      ...buildBillingFields({
+        repCount: 0,
+        includedReps: Number(team.included_reps ?? includedReps),
+        includedRepPriceCents: Number(
+          team.included_rep_price_cents ?? includedRepPriceCents
+        ),
+        extraRepPriceCents: Number(team.extra_rep_price_cents ?? extraRepPriceCents),
+      }),
       latestInvite: invite,
       createdAt: team.created_at,
     },
@@ -219,5 +287,57 @@ export async function POST(request: Request) {
       temporaryPassword,
     },
     invite,
+  });
+}
+
+export async function PATCH(request: Request) {
+  const auth = await requirePlatformAdmin(request);
+  if (!auth) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const body = await request.json().catch(() => ({}));
+  const teamId = normalizeText(body.teamId);
+  const includedReps = normalizeWholeNumber(body.includedReps, 10, 500);
+  const includedRepPriceCents = normalizeCents(body.includedRepPriceCents);
+  const extraRepPriceCents = normalizeCents(body.extraRepPriceCents);
+
+  if (!teamId) {
+    return NextResponse.json({ error: "teamId is required" }, { status: 400 });
+  }
+
+  const admin = createAdmin();
+  const { count, error: countError } = await admin
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("team_id", teamId)
+    .eq("role", "rep")
+    .eq("is_active", true);
+
+  if (countError) {
+    return NextResponse.json({ error: countError.message }, { status: 500 });
+  }
+
+  const { data: team, error } = await admin
+    .from("teams")
+    .update({
+      included_reps: includedReps,
+      included_rep_price_cents: includedRepPriceCents,
+      extra_rep_price_cents: extraRepPriceCents,
+    })
+    .eq("id", teamId)
+    .select("id, included_reps, included_rep_price_cents, extra_rep_price_cents")
+    .single();
+
+  if (error || !team) {
+    return NextResponse.json({ error: error?.message ?? "Team not found" }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    teamId: team.id,
+    ...buildBillingFields({
+      repCount: count ?? 0,
+      includedReps: Number(team.included_reps),
+      includedRepPriceCents: Number(team.included_rep_price_cents),
+      extraRepPriceCents: Number(team.extra_rep_price_cents),
+    }),
   });
 }

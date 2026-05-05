@@ -16,6 +16,9 @@ export interface Team {
   readonly id: string;
   readonly name: string;
   readonly managerId: string;
+  readonly includedReps: number;
+  readonly includedRepPriceCents: number;
+  readonly extraRepPriceCents: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

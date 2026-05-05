@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdmin } from "@flex/supabase/admin";
+import { claimTeamInvite, mapClaimInviteError } from "@/lib/team-invites";
 
 export async function POST(request: Request) {
   const body = await request.json();
@@ -12,24 +13,21 @@ export async function POST(request: Request) {
     );
   }
 
+  const normalizedInviteCode = String(inviteCode).trim().toUpperCase();
   const admin = createAdmin();
 
   // Validate invite code before creating account
   const { data: invite } = await admin
     .from("team_invites")
     .select("*")
-    .eq("code", inviteCode.toUpperCase())
+    .eq("code", normalizedInviteCode)
     .single();
 
   if (!invite) {
     return NextResponse.json({ error: "Invalid invite code" }, { status: 404 });
   }
 
-  if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-    return NextResponse.json({ error: "Invite code has expired" }, { status: 410 });
-  }
-
-  if (invite.uses >= invite.max_uses) {
+  if (invite.max_uses !== null && invite.uses >= invite.max_uses) {
     return NextResponse.json({ error: "Invite code has been fully used" }, { status: 410 });
   }
 
@@ -47,17 +45,21 @@ export async function POST(request: Request) {
 
   const userId = authData.user.id;
 
-  // Assign user to the invite's team
-  await admin
-    .from("profiles")
-    .update({ team_id: invite.team_id })
-    .eq("id", userId);
-
-  // Increment invite usage
-  await admin
-    .from("team_invites")
-    .update({ uses: invite.uses + 1 })
-    .eq("id", invite.id);
-
-  return NextResponse.json({ success: true, teamId: invite.team_id });
+  try {
+    const claim = await claimTeamInvite(admin, userId, normalizedInviteCode);
+    return NextResponse.json({
+      success: true,
+      teamId: claim.team_id,
+      billing: {
+        activeReps: claim.current_reps,
+        includedReps: claim.included_reps,
+        overageReps: claim.overage_reps,
+        estimatedMonthlyCents: claim.estimated_monthly_cents,
+      },
+    });
+  } catch (err) {
+    await admin.auth.admin.deleteUser(userId);
+    const mapped = mapClaimInviteError(err);
+    return NextResponse.json({ error: mapped.message }, { status: mapped.status });
+  }
 }
