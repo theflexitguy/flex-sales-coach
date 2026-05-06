@@ -12,7 +12,7 @@ interface CallDetailPageProps {
 
 export default async function CallDetailPage({ params }: CallDetailPageProps) {
   const { id } = await params;
-  await requireAuth();
+  const viewer = await requireAuth();
   const supabase = await createServer();
 
   // Fetch call
@@ -103,6 +103,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     <CallDetailClient
       call={{
         id: call.id,
+        repId: call.rep_id,
         customerName: call.customer_name,
         repName: repProfile?.full_name ?? "Unknown",
         durationSeconds: call.duration_seconds,
@@ -183,6 +184,10 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
           createdAt: r.created_at as string,
         })),
       }))}
+      viewer={{
+        id: viewer.id,
+        role: viewer.role,
+      }}
     />
     <CallChat callId={id} />
     </>

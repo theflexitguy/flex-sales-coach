@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AudioPlayer, seekAudio } from "./audio-player";
 import { CoachingNotesForm } from "./coaching-notes-form";
 import { OutcomeSelector } from "./outcome-selector";
 import { ShareButton } from "./share-button";
-import { AudioRecorder, AudioPlayback } from "@/components/ui/audio-recorder";
+import { AudioPlayback } from "@/components/ui/audio-recorder";
 import { GRADE_COLORS, GRADE_LABELS } from "@flex/shared";
 import type { TranscriptUtterance } from "@flex/shared";
 
@@ -33,6 +33,7 @@ interface HelpRequestItem {
 interface CallDetailClientProps {
   call: {
     id: string;
+    repId: string;
     customerName: string | null;
     repName: string;
     durationSeconds: number;
@@ -79,6 +80,10 @@ interface CallDetailClientProps {
   }>;
   utterances: TranscriptUtterance[];
   helpRequests: HelpRequestItem[];
+  viewer: {
+    id: string;
+    role: string;
+  };
 }
 
 export function CallDetailClient({
@@ -89,16 +94,25 @@ export function CallDetailClient({
   notes,
   utterances,
   helpRequests,
+  viewer,
 }: CallDetailClientProps) {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeHelpRequestId, setActiveHelpRequestId] = useState<string | null>(null);
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  const [activeNoteTargetMs, setActiveNoteTargetMs] = useState<number | null>(null);
   const [autoFollow, setAutoFollow] = useState(true);
   const [userScrolledAway, setUserScrolledAway] = useState(false);
   const isAutoScrolling = useRef(false);
   const lastScrolledUtteranceIdx = useRef(-1);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
+  const isOwnCall = viewer.id === call.repId;
+  const canCoach = viewer.role === "manager" || !isOwnCall;
+  const notesByUtteranceIndex = useMemo(
+    () => mapNotesToUtterances(utterances, notes),
+    [utterances, notes]
+  );
 
   // Auto-navigate to help request from query param (e.g. coming from help requests queue)
   useEffect(() => {
@@ -177,6 +191,16 @@ export function CallDetailClient({
   function scrollToHelpRequest(hr: HelpRequestItem) {
     setActiveHelpRequestId(hr.id);
     jumpTo(hr.startMs);
+  }
+
+  function scrollToTranscriptNote(note: CallDetailClientProps["notes"][number]) {
+    if (note.timestampMs == null) return;
+    setActiveNoteId(note.id);
+    jumpTo(note.timestampMs);
+    window.setTimeout(() => {
+      const el = document.querySelector(`[data-transcript-note-id="${note.id}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 250);
   }
 
   const handleTimeUpdate = useCallback((timeMs: number) => {
@@ -429,7 +453,10 @@ export function CallDetailClient({
                       <button
                         data-start-ms={u.startMs}
                         data-utterance-active={isActive}
-                        onClick={() => jumpTo(u.startMs)}
+                        onClick={() => {
+                          setActiveNoteTargetMs(u.startMs);
+                          jumpTo(u.startMs);
+                        }}
                         className={`w-full flex gap-3 text-left rounded-lg px-3 py-2 transition-colors ${
                           matchedHr
                             ? activeHelpRequestId === matchedHr.id
@@ -478,6 +505,71 @@ export function CallDetailClient({
                           </p>
                         </div>
                       </button>
+
+                      {(notesByUtteranceIndex.get(i)?.length ?? 0) > 0 && (
+                        <div className="ml-10 mt-1 space-y-1.5">
+                          {notesByUtteranceIndex.get(i)!.map((note) => (
+                            <div
+                              key={note.id}
+                              data-transcript-note-id={note.id}
+                              className={`rounded-lg border px-3 py-2 transition-colors ${
+                                activeNoteId === note.id
+                                  ? "border-sky-500/50 bg-sky-500/10"
+                                  : "border-sky-500/20 bg-sky-500/5"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-medium text-sky-400">
+                                  {note.authorName}
+                                </span>
+                                {note.timestampMs != null && (
+                                  <span className="text-[10px] text-sky-400/80 font-mono">
+                                    @ {formatMs(note.timestampMs)}
+                                  </span>
+                                )}
+                              </div>
+                              {note.content !== "Audio note" && (
+                                <p className="mt-1 text-sm text-zinc-200">{note.content}</p>
+                              )}
+                              {note.audioUrl && (
+                                <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                                  <AudioPlayback
+                                    url={note.audioUrl}
+                                    durationSeconds={note.audioDurationSeconds ?? undefined}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {canCoach && activeNoteTargetMs === u.startMs && (
+                        <div className="ml-10 mt-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-zinc-300">
+                              Coaching note for {formatMs(u.startMs)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setActiveNoteTargetMs(null)}
+                              className="text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
+                            >
+                              Close
+                            </button>
+                          </div>
+                          <CoachingNotesForm
+                            callId={call.id}
+                            currentTimeMs={u.startMs}
+                            autoFocus
+                            defaultPinned
+                            lockAnchor
+                            placeholder="Leave coaching for this exact moment..."
+                            submitLabel="Add Here"
+                            onSaved={() => setActiveNoteTargetMs(null)}
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -638,7 +730,7 @@ export function CallDetailClient({
                           : ""
                       }`}
                       onClick={() => {
-                        if (item.data.timestampMs != null) jumpTo(item.data.timestampMs);
+                        scrollToTranscriptNote(item.data);
                       }}
                     >
                       <div className="flex items-center justify-between">
@@ -700,6 +792,36 @@ export function CallDetailClient({
     )}
     </>
   );
+}
+
+function mapNotesToUtterances(
+  utterances: readonly TranscriptUtterance[],
+  notes: readonly CallDetailClientProps["notes"][number][]
+): Map<number, CallDetailClientProps["notes"][number][]> {
+  const mapped = new Map<number, CallDetailClientProps["notes"][number][]>();
+  if (utterances.length === 0) return mapped;
+
+  for (const note of notes) {
+    if (note.timestampMs == null) continue;
+    let index = utterances.findIndex((u, i, arr) => {
+      const endMs = arr[i + 1]?.startMs ?? u.endMs;
+      return note.timestampMs! >= u.startMs && note.timestampMs! < endMs;
+    });
+
+    if (index < 0) {
+      index = note.timestampMs < utterances[0].startMs ? 0 : utterances.length - 1;
+    }
+
+    const existing = mapped.get(index) ?? [];
+    existing.push(note);
+    mapped.set(index, existing);
+  }
+
+  for (const noteList of mapped.values()) {
+    noteList.sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0));
+  }
+
+  return mapped;
 }
 
 type CoachingTimelineItem =

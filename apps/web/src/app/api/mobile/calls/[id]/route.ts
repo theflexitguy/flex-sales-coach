@@ -95,6 +95,7 @@ export async function GET(
   return NextResponse.json({
     call: {
       id: call.id,
+      repId: call.rep_id,
       customerName: call.customer_name,
       durationSeconds:
         call.duration_seconds && call.duration_seconds > 0

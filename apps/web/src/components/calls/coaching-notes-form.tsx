@@ -13,12 +13,27 @@ interface TeamMember {
 interface CoachingNotesFormProps {
   callId: string;
   currentTimeMs: number;
+  autoFocus?: boolean;
+  defaultPinned?: boolean;
+  lockAnchor?: boolean;
+  onSaved?: () => void;
+  placeholder?: string;
+  submitLabel?: string;
 }
 
-export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormProps) {
+export function CoachingNotesForm({
+  callId,
+  currentTimeMs,
+  autoFocus = false,
+  defaultPinned = false,
+  lockAnchor = false,
+  onSaved,
+  placeholder,
+  submitLabel = "Add Note",
+}: CoachingNotesFormProps) {
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
-  const [anchorTime, setAnchorTime] = useState(false);
+  const [anchorTime, setAnchorTime] = useState(defaultPinned);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioDuration, setAudioDuration] = useState(0);
   const [mentionIds, setMentionIds] = useState<Set<string>>(new Set());
@@ -82,7 +97,7 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
 
     const formData = new FormData();
     formData.append("content", content.trim());
-    if (anchorTime) formData.append("timestampMs", String(Math.round(currentTimeMs)));
+    if (lockAnchor || anchorTime) formData.append("timestampMs", String(Math.round(currentTimeMs)));
     if (audioBlob) {
       formData.append("audio", audioBlob, `note.${audioBlob.type.includes("mp4") ? "m4a" : "webm"}`);
       formData.append("audioDuration", String(audioDuration));
@@ -107,6 +122,7 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
     setMentionEveryone(false);
     setSaving(false);
     router.refresh();
+    onSaved?.();
   }
 
   const hasMentions = mentionEveryone || mentionIds.size > 0;
@@ -116,8 +132,9 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
-        placeholder={audioBlob ? "Add a note to go with the audio (optional)..." : "Add a coaching note..."}
+        placeholder={audioBlob ? "Add a note to go with the audio (optional)..." : placeholder ?? "Add a coaching note..."}
         rows={3}
+        autoFocus={autoFocus}
         className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2.5 text-sm text-white placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition-colors resize-none"
       />
 
@@ -160,17 +177,23 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={anchorTime}
-              onChange={(e) => setAnchorTime(e.target.checked)}
-              className="rounded border-zinc-600 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-0"
-            />
-            <span className="text-xs text-zinc-400">
-              Pin to {formatMs(currentTimeMs)}
+          {lockAnchor ? (
+            <span className="text-xs text-sky-400 font-mono">
+              @ {formatMs(currentTimeMs)}
             </span>
-          </label>
+          ) : (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={anchorTime}
+                onChange={(e) => setAnchorTime(e.target.checked)}
+                className="rounded border-zinc-600 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-0"
+              />
+              <span className="text-xs text-zinc-400">
+                Pin to {formatMs(currentTimeMs)}
+              </span>
+            </label>
+          )}
 
           {!audioBlob && (
             <AudioRecorder
@@ -230,7 +253,7 @@ export function CoachingNotesForm({ callId, currentTimeMs }: CoachingNotesFormPr
           disabled={saving || (!content.trim() && !audioBlob)}
           className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {saving ? "Saving..." : "Add Note"}
+          {saving ? "Saving..." : submitLabel}
         </button>
       </div>
     </form>

@@ -50,6 +50,7 @@ const GRADE_LABELS: Record<string, string> = {
 interface CallDetail {
   call: {
     id: string;
+    repId: string;
     customerName: string | null;
     durationSeconds: number;
     status: string;
@@ -130,6 +131,9 @@ export default function CallDetailScreen() {
   const [helpModal, setHelpModal] = useState<{ text: string; startMs: number; endMs: number } | null>(null);
   const [helpMessage, setHelpMessage] = useState("");
   const [sendingHelp, setSendingHelp] = useState(false);
+  const [noteModal, setNoteModal] = useState<{ text: string; startMs: number; endMs: number } | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
@@ -369,6 +373,9 @@ export default function CallDetailScreen() {
   }
 
   const { call, analysis, sections, objections, transcript, notes, helpRequests } = data;
+  const isOwnCall = call.repId === profile?.id;
+  const canAskForHelp = !isManager && isOwnCall;
+  const canLeaveCoachingNote = isManager;
 
   return (
     <>
@@ -617,7 +624,7 @@ export default function CallDetailScreen() {
         ))}
       </View>
 
-      {/* Transcript — long-press any line to ask manager for help */}
+      {/* Transcript */}
       {transcript.utterances.length > 0 && (
         <View style={styles.section} onLayout={(e) => {
           transcriptSectionY.current = e.nativeEvent.layout.y;
@@ -631,12 +638,21 @@ export default function CallDetailScreen() {
           }
         }}>
           <Text style={styles.sectionTitle}>Transcript</Text>
-          <Text style={styles.transcriptHint}>Long-press any line to ask your manager for help</Text>
+          {(canAskForHelp || canLeaveCoachingNote) && (
+            <Text style={styles.transcriptHint}>
+              {canAskForHelp
+                ? "Long-press any line to ask your manager for help"
+                : "Long-press any line to leave a coaching note"}
+            </Text>
+          )}
           {transcript.utterances.map((u, i) => {
             const matchingHelp = localHelpRequests.find(
               (h) => u.startMs >= h.startMs && u.startMs <= h.endMs
             );
             const isHelpStart = matchingHelp && (!transcript.utterances[i - 1] || transcript.utterances[i - 1].startMs < matchingHelp.startMs);
+            const matchingNotes = notes.filter(
+              (n) => n.timestampMs != null && n.timestampMs >= u.startMs && n.timestampMs < u.endMs
+            );
             return (
               <View key={i} onLayout={(e) => { utteranceYPositions.current[i] = e.nativeEvent.layout.y; }}>
                 {isHelpStart && matchingHelp && (
@@ -771,7 +787,13 @@ export default function CallDetailScreen() {
                 )}
                 <Pressable
                   onPress={() => seekToTimestamp(u.startMs)}
-                  onLongPress={() => setHelpModal({ text: u.text, startMs: u.startMs, endMs: u.endMs })}
+                  onLongPress={() => {
+                    if (canAskForHelp) {
+                      setHelpModal({ text: u.text, startMs: u.startMs, endMs: u.endMs });
+                    } else if (canLeaveCoachingNote) {
+                      setNoteModal({ text: u.text, startMs: u.startMs, endMs: u.endMs });
+                    }
+                  }}
                   style={({ pressed }) => [
                     styles.utterance,
                     pressed && styles.utterancePressed,
@@ -811,6 +833,24 @@ export default function CallDetailScreen() {
                     <Text style={styles.utteranceText}>{u.text}</Text>
                   </View>
                 </Pressable>
+                {matchingNotes.length > 0 && (
+                  <View style={styles.inlineNotes}>
+                    {matchingNotes.map((n) => (
+                      <View key={n.id} style={styles.inlineNoteCard}>
+                        <View style={styles.inlineNoteHeader}>
+                          <Text style={styles.inlineNoteAuthor}>{n.authorName}</Text>
+                          {n.timestampMs != null && (
+                            <Text style={styles.inlineNoteTime}>@ {formatMs(n.timestampMs)}</Text>
+                          )}
+                        </View>
+                        {n.content !== "Audio note" && (
+                          <Text style={styles.inlineNoteContent}>{n.content}</Text>
+                        )}
+                        {n.audioUrl && <VoiceNotePlayer audioUrl={n.audioUrl} authorName={n.authorName} />}
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
             );
           })}
@@ -925,6 +965,76 @@ export default function CallDetailScreen() {
             >
               <Ionicons name="send" size={16} color="#fff" />
               <Text style={styles.helpSendText}>{sendingHelp ? "Sending..." : "Send to Manager"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+
+    {/* Coaching Note Modal */}
+    <Modal visible={!!noteModal} transparent animationType="slide">
+      <KeyboardAvoidingView
+        style={styles.helpModalOverlay}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <Pressable style={styles.helpModalBackdrop} onPress={() => { setNoteModal(null); setNoteText(""); }} />
+        <View style={styles.helpModalContent}>
+          <Text style={styles.helpModalTitle}>Add Coaching Note</Text>
+          <View style={styles.helpExcerptBox}>
+            <Text style={styles.helpExcerptText}>"{noteModal?.text}"</Text>
+          </View>
+          <TextInput
+            style={styles.helpInput}
+            value={noteText}
+            onChangeText={setNoteText}
+            placeholder="Leave coaching for this section..."
+            placeholderTextColor="#71717a"
+            multiline
+            numberOfLines={3}
+            autoFocus
+          />
+          <View style={styles.helpActions}>
+            <TouchableOpacity
+              style={styles.helpCancel}
+              onPress={() => { setNoteModal(null); setNoteText(""); }}
+            >
+              <Text style={styles.helpCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.helpSend, (savingNote || !noteText.trim()) && { opacity: 0.5 }]}
+              disabled={savingNote || !noteText.trim()}
+              onPress={async () => {
+                if (!noteModal || !id) return;
+                setSavingNote(true);
+                try {
+                  await apiPost(`/api/mobile/calls/${id}/notes`, {
+                    content: noteText.trim(),
+                    timestampMs: noteModal.startMs,
+                  });
+                  setData((prev) => prev ? {
+                    ...prev,
+                    notes: [...prev.notes, {
+                      id: `temp-${Date.now()}`,
+                      content: noteText.trim(),
+                      timestampMs: noteModal.startMs,
+                      createdAt: new Date().toISOString(),
+                      authorName: profile?.fullName ?? "Coach",
+                      audioUrl: null,
+                      audioDurationSeconds: null,
+                    }],
+                  } : prev);
+                  setNoteModal(null);
+                  setNoteText("");
+                  haptic.success();
+                } catch (err: unknown) {
+                  Alert.alert("Error", err instanceof Error ? err.message : "Failed to save note");
+                } finally {
+                  setSavingNote(false);
+                }
+              }}
+            >
+              <Ionicons name="create-outline" size={16} color="#fff" />
+              <Text style={styles.helpSendText}>{savingNote ? "Saving..." : "Add Note"}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1180,6 +1290,23 @@ const styles = StyleSheet.create({
   utterancePressed: { backgroundColor: "rgba(53,178,255,0.08)", borderRadius: 8 },
   utteranceActive: { backgroundColor: "rgba(53,178,255,0.06)", borderRadius: 8, borderLeftWidth: 2, borderLeftColor: "#35b2ff", paddingLeft: 8 },
   utteranceHelpHighlight: { backgroundColor: "rgba(245,158,11,0.06)", borderLeftWidth: 2, borderLeftColor: "#f59e0b", borderRadius: 8, paddingLeft: 8 },
+  inlineNotes: { marginLeft: 38, marginBottom: 8, gap: 6 },
+  inlineNoteCard: {
+    backgroundColor: "rgba(53,178,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(53,178,255,0.18)",
+    borderRadius: 10,
+    padding: 10,
+  },
+  inlineNoteHeader: {
+    flexDirection: "row" as const,
+    justifyContent: "space-between" as const,
+    alignItems: "center" as const,
+    marginBottom: 4,
+  },
+  inlineNoteAuthor: { color: "#35b2ff", fontSize: 12, fontWeight: "600" as const },
+  inlineNoteTime: { color: "#38bdf8", fontSize: 11, fontFamily: "monospace" },
+  inlineNoteContent: { color: "#e4e4e7", fontSize: 13, lineHeight: 18 },
   helpRequestBanner: { backgroundColor: "rgba(245,158,11,0.08)", borderWidth: 1, borderColor: "rgba(245,158,11,0.2)", borderRadius: 10, padding: 12, marginBottom: 6, gap: 6 },
   helpRequestHeader: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
   helpRequestLabel: { color: "#f59e0b", fontSize: 12, fontWeight: "600" as const },
