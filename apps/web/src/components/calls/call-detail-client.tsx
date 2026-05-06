@@ -106,6 +106,8 @@ export function CallDetailClient({
   const isAutoScrolling = useRef(false);
   const lastScrolledUtteranceIdx = useRef(-1);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const transcriptLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcriptLongPressTriggered = useRef(false);
   const searchParams = useSearchParams();
   const isOwnCall = viewer.id === call.repId;
   const canCoach = viewer.role === "manager" || !isOwnCall;
@@ -113,6 +115,15 @@ export function CallDetailClient({
     () => mapNotesToUtterances(utterances, notes),
     [utterances, notes]
   );
+
+  const clearTranscriptLongPress = useCallback(() => {
+    if (transcriptLongPressTimer.current) {
+      clearTimeout(transcriptLongPressTimer.current);
+      transcriptLongPressTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearTranscriptLongPress, [clearTranscriptLongPress]);
 
   // Auto-navigate to help request from query param (e.g. coming from help requests queue)
   useEffect(() => {
@@ -201,6 +212,26 @@ export function CallDetailClient({
       const el = document.querySelector(`[data-transcript-note-id="${note.id}"]`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 250);
+  }
+
+  function startTranscriptLongPress(timeMs: number) {
+    if (!canCoach) return;
+
+    clearTranscriptLongPress();
+    transcriptLongPressTriggered.current = false;
+    transcriptLongPressTimer.current = setTimeout(() => {
+      transcriptLongPressTriggered.current = true;
+      setActiveNoteTargetMs(timeMs);
+    }, 550);
+  }
+
+  function handleTranscriptClick(timeMs: number) {
+    clearTranscriptLongPress();
+    if (transcriptLongPressTriggered.current) {
+      transcriptLongPressTriggered.current = false;
+      return;
+    }
+    jumpTo(timeMs);
   }
 
   const handleTimeUpdate = useCallback((timeMs: number) => {
@@ -453,10 +484,14 @@ export function CallDetailClient({
                       <button
                         data-start-ms={u.startMs}
                         data-utterance-active={isActive}
-                        onClick={() => {
-                          setActiveNoteTargetMs(u.startMs);
-                          jumpTo(u.startMs);
+                        onPointerDown={() => startTranscriptLongPress(u.startMs)}
+                        onPointerUp={clearTranscriptLongPress}
+                        onPointerLeave={clearTranscriptLongPress}
+                        onPointerCancel={clearTranscriptLongPress}
+                        onContextMenu={(e) => {
+                          if (canCoach) e.preventDefault();
                         }}
+                        onClick={() => handleTranscriptClick(u.startMs)}
                         className={`w-full flex gap-3 text-left rounded-lg px-3 py-2 transition-colors ${
                           matchedHr
                             ? activeHelpRequestId === matchedHr.id
