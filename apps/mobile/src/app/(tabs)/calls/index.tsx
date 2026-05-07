@@ -17,7 +17,8 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { apiGet, apiPatch, apiPost } from "../../../services/api";
+import { Swipeable } from "react-native-gesture-handler";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../../../services/api";
 import { invalidateCachePrefix, useCachedFetch } from "../../../hooks/useCachedFetch";
 import { useAuthStore } from "../../../stores/auth-store";
 
@@ -45,6 +46,22 @@ const GRADE_COLORS: Record<string, string> = {
 };
 
 type CallsFilter = "mine" | "team" | "shared";
+
+function formatDuration(s: number) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 interface TeamMember {
   id: string;
@@ -74,6 +91,10 @@ export default function CallsListScreen() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [moveCall, setMoveCall] = useState<CallItem | null>(null);
   const [movingCall, setMovingCall] = useState(false);
+  const [renameCall, setRenameCall] = useState<CallItem | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renamingCall, setRenamingCall] = useState(false);
+  const [deletingCallId, setDeletingCallId] = useState<string | null>(null);
 
   // Load team members when switching to team view
   const teamLoaded = useRef(false);
@@ -140,22 +161,6 @@ export default function CallsListScreen() {
     ? allCalls.filter((c) => c.repId === selectedRepId)
     : allCalls;
 
-  function formatDuration(s: number) {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, "0")}`;
-  }
-
-  function formatDate(iso: string) {
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-
   async function createFolder() {
     const name = folderName.trim();
     if (!name) return;
@@ -173,6 +178,56 @@ export default function CallsListScreen() {
     } finally {
       setCreatingFolder(false);
     }
+  }
+
+  function startRenameCall(call: CallItem) {
+    setRenameCall(call);
+    setRenameName(call.customerName ?? "");
+  }
+
+  async function renameSelectedCall() {
+    if (!renameCall) return;
+    const customerName = renameName.trim();
+    if (!customerName) return;
+    setRenamingCall(true);
+    try {
+      await apiPatch(`/api/mobile/calls/${renameCall.id}`, { customerName });
+      setRenameCall(null);
+      setRenameName("");
+      invalidateCachePrefix("calls-list-");
+      refresh();
+    } catch (err: unknown) {
+      Alert.alert("Could not rename conversation", err instanceof Error ? err.message : "Failed to rename conversation");
+    } finally {
+      setRenamingCall(false);
+    }
+  }
+
+  function confirmDeleteCall(call: CallItem) {
+    if (!isManager) return;
+    Alert.alert(
+      "Delete conversation?",
+      `Delete "${call.customerName ?? "Unknown Customer"}"? This removes the recording, transcript, analysis, and coaching notes for everyone on the team.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingCallId(call.id);
+            try {
+              await apiDelete(`/api/mobile/calls/${call.id}`);
+              invalidateCachePrefix("calls-list-");
+              await Promise.all([loadFolders(), refresh()]);
+            } catch (err: unknown) {
+              Alert.alert("Could not delete conversation", err instanceof Error ? err.message : "Failed to delete conversation");
+            } finally {
+              setDeletingCallId(null);
+            }
+          },
+        },
+      ]
+    );
   }
 
   async function moveCallToFolder(folderId: string | null) {
@@ -330,60 +385,18 @@ export default function CallsListScreen() {
         </View>
       }
       renderItem={({ item }) => (
-        <TouchableOpacity
-          style={styles.card}
-          onPress={() => router.push(`/(tabs)/calls/${item.id}`)}
-        >
-          <View style={styles.cardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.customerName}>
-                {item.customerName ?? "Unknown Customer"}
-              </Text>
-              <Text style={styles.meta}>
-                {filter === "team" && item.repName ? `${item.repName} · ` : ""}
-                {formatDate(item.recordedAt)} · {formatDuration(item.durationSeconds)}
-              </Text>
-              {filter === "mine" && item.folderName && (
-                <View style={styles.callFolderBadge}>
-                  <Ionicons name="folder-outline" size={12} color="#35b2ff" />
-                  <Text style={styles.callFolderBadgeText}>{item.folderName}</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.cardActions}>
-              {filter === "mine" && (
-                <TouchableOpacity
-                  style={styles.cardIconButton}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    setMoveCall(item);
-                  }}
-                >
-                  <Ionicons name="folder-open-outline" size={18} color="#a1a1aa" />
-                </TouchableOpacity>
-              )}
-              {item.overallScore != null ? (
-                <View style={styles.scoreBadge}>
-                  <Text
-                    style={[
-                      styles.scoreText,
-                      { color: GRADE_COLORS[item.overallGrade ?? ""] ?? "#a1a1aa" },
-                    ]}
-                  >
-                    {item.overallScore}
-                  </Text>
-                </View>
-              ) : (
-                <StatusBadge status={item.status} />
-              )}
-            </View>
-          </View>
-          {item.summary && (
-            <Text style={styles.summary} numberOfLines={2}>
-              {item.summary}
-            </Text>
-          )}
-        </TouchableOpacity>
+        <CallListRow
+          item={item}
+          filter={filter}
+          isManager={isManager}
+          canOrganize={filter === "mine" && item.repId === profile?.id}
+          canRename={item.repId === profile?.id || isManager}
+          deleting={deletingCallId === item.id}
+          onOpen={() => router.push(`/(tabs)/calls/${item.id}`)}
+          onMove={() => setMoveCall(item)}
+          onRename={() => startRenameCall(item)}
+          onDelete={() => confirmDeleteCall(item)}
+        />
       )}
       ListFooterComponent={
         <>
@@ -409,9 +422,146 @@ export default function CallsListScreen() {
               setFolderModalVisible(true);
             }}
           />
+          <RenameCallModal
+            call={renameCall}
+            name={renameName}
+            saving={renamingCall}
+            onNameChange={setRenameName}
+            onCancel={() => {
+              setRenameCall(null);
+              setRenameName("");
+            }}
+            onSave={renameSelectedCall}
+          />
         </>
       }
     />
+  );
+}
+
+function CallListRow({
+  item,
+  filter,
+  isManager,
+  canOrganize,
+  canRename,
+  deleting,
+  onOpen,
+  onMove,
+  onRename,
+  onDelete,
+}: {
+  item: CallItem;
+  filter: CallsFilter;
+  isManager: boolean;
+  canOrganize: boolean;
+  canRename: boolean;
+  deleting: boolean;
+  onOpen: () => void;
+  onMove: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const swipeableRef = useRef<Swipeable>(null);
+
+  return (
+    <Swipeable
+      ref={swipeableRef}
+      leftThreshold={72}
+      rightThreshold={72}
+      overshootLeft={false}
+      overshootRight={false}
+      enabled={canOrganize || isManager}
+      renderLeftActions={
+        canOrganize
+          ? () => (
+              <View style={[styles.swipeAction, styles.swipeFolderAction]}>
+                <Ionicons name="folder-open-outline" size={22} color="#fff" />
+                <Text style={styles.swipeActionText}>Folder</Text>
+              </View>
+            )
+          : undefined
+      }
+      renderRightActions={
+        isManager
+          ? () => (
+              <View style={[styles.swipeAction, styles.swipeDeleteAction]}>
+                <Ionicons name="trash-outline" size={22} color="#fff" />
+                <Text style={styles.swipeActionText}>Delete</Text>
+              </View>
+            )
+          : undefined
+      }
+      onSwipeableOpen={(direction) => {
+        swipeableRef.current?.close();
+        if (direction === "left" && canOrganize) {
+          onMove();
+        } else if (direction === "right" && isManager) {
+          onDelete();
+        }
+      }}
+    >
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.82}
+        delayLongPress={350}
+        disabled={deleting}
+        onPress={onOpen}
+        onLongPress={canRename ? onRename : undefined}
+      >
+        <View style={styles.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.customerName}>
+              {item.customerName ?? "Unknown Customer"}
+            </Text>
+            <Text style={styles.meta}>
+              {filter === "team" && item.repName ? `${item.repName} · ` : ""}
+              {formatDate(item.recordedAt)} · {formatDuration(item.durationSeconds)}
+            </Text>
+            {filter === "mine" && item.folderName && (
+              <View style={styles.callFolderBadge}>
+                <Ionicons name="folder-outline" size={12} color="#35b2ff" />
+                <Text style={styles.callFolderBadgeText}>{item.folderName}</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.cardActions}>
+            {canOrganize && (
+              <TouchableOpacity
+                style={styles.cardIconButton}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onMove();
+                }}
+              >
+                <Ionicons name="folder-open-outline" size={18} color="#a1a1aa" />
+              </TouchableOpacity>
+            )}
+            {deleting ? (
+              <ActivityIndicator size="small" color="#ef4444" />
+            ) : item.overallScore != null ? (
+              <View style={styles.scoreBadge}>
+                <Text
+                  style={[
+                    styles.scoreText,
+                    { color: GRADE_COLORS[item.overallGrade ?? ""] ?? "#a1a1aa" },
+                  ]}
+                >
+                  {item.overallScore}
+                </Text>
+              </View>
+            ) : (
+              <StatusBadge status={item.status} />
+            )}
+          </View>
+        </View>
+        {item.summary && (
+          <Text style={styles.summary} numberOfLines={2}>
+            {item.summary}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </Swipeable>
   );
 }
 
@@ -534,6 +684,62 @@ function MoveCallModal({
   );
 }
 
+function RenameCallModal({
+  call,
+  name,
+  saving,
+  onNameChange,
+  onCancel,
+  onSave,
+}: {
+  call: CallItem | null;
+  name: string;
+  saving: boolean;
+  onNameChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Modal visible={!!call} transparent animationType="slide">
+      <KeyboardAvoidingView
+        style={styles.modalOverlay}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={onCancel} />
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Rename Conversation</Text>
+          <Text style={styles.modalSubtitle} numberOfLines={1}>
+            {call?.customerName ?? "Unknown Customer"}
+          </Text>
+          <TextInput
+            style={styles.modalInput}
+            value={name}
+            onChangeText={onNameChange}
+            placeholder="Conversation name"
+            placeholderTextColor="#71717a"
+            autoFocus
+            maxLength={80}
+            returnKeyType="done"
+            onSubmitEditing={onSave}
+          />
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancelButton} onPress={onCancel}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalPrimaryButton, (saving || !name.trim()) && { opacity: 0.5 }]}
+              disabled={saving || !name.trim()}
+              onPress={onSave}
+            >
+              <Text style={styles.modalPrimaryText}>{saving ? "Saving..." : "Save"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; color: string; label: string }> = {
     completed: { bg: "rgba(53,178,255,0.1)", color: "#35b2ff", label: "Analyzed" },
@@ -638,6 +844,26 @@ const styles = StyleSheet.create({
   folderChipTextActive: { color: "#35b2ff" },
   folderDot: { width: 8, height: 8, borderRadius: 4 },
   folderCount: { color: "#52525b", fontSize: 11, fontWeight: "600" },
+  swipeAction: {
+    width: 104,
+    marginTop: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  swipeFolderAction: {
+    marginLeft: 16,
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+    backgroundColor: "#0284c7",
+  },
+  swipeDeleteAction: {
+    marginRight: 16,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    backgroundColor: "#dc2626",
+  },
+  swipeActionText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   card: {
     marginHorizontal: 16,
     marginTop: 12,

@@ -220,3 +220,5 @@ DROP TRIGGER IF EXISTS trg_refresh_rep_stats ON public.calls;
 CREATE TRIGGER trg_refresh_rep_stats
   AFTER INSERT OR UPDATE OR DELETE ON public.calls
   FOR EACH ROW EXECUTE FUNCTION public.refresh_rep_daily_stats();
+
+NOTIFY pgrst, 'reload schema';

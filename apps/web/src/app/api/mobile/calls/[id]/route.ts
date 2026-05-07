@@ -170,6 +170,58 @@ export async function GET(
   });
 }
 
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const auth = await authenticateRequest(request);
+  if (!auth) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { customerName } = await request.json();
+  const trimmedName = typeof customerName === "string" ? customerName.trim() : "";
+  if (!trimmedName) {
+    return NextResponse.json({ error: "Conversation name is required" }, { status: 400 });
+  }
+  if (trimmedName.length > 80) {
+    return NextResponse.json({ error: "Conversation name must be 80 characters or fewer" }, { status: 400 });
+  }
+
+  const { data: call } = await auth.supabase
+    .from("calls")
+    .select("id, rep_id, team_id")
+    .eq("id", id)
+    .single();
+
+  if (!call) {
+    return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+  }
+
+  const canRenameOwn = call.rep_id === auth.user.id;
+  const canRenameTeam =
+    auth.profile?.role === "manager" &&
+    !!auth.profile.team_id &&
+    call.team_id === auth.profile.team_id;
+
+  if (!canRenameOwn && !canRenameTeam) {
+    return NextResponse.json({ error: "Cannot rename this conversation" }, { status: 403 });
+  }
+
+  const admin = createAdmin();
+  const { error } = await admin
+    .from("calls")
+    .update({ customer_name: trimmedName })
+    .eq("id", id);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, customerName: trimmedName });
+}
+
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }

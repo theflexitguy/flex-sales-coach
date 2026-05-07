@@ -3,6 +3,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AppState, View, ActivityIndicator } from "react-native";
 import type { AppStateStatus } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useAuthStore } from "../stores/auth-store";
 import { uploadQueue } from "../services/recording/UploadQueue";
 import { chunkManager } from "../services/recording/ChunkManager";
@@ -72,7 +73,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
       {session && <UploadProgressBanner />}
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#09090b" } }}>
@@ -99,6 +100,6 @@ export default function RootLayout() {
           }}
         />
       </Stack>
-    </>
+    </GestureHandlerRootView>
   );
 }
