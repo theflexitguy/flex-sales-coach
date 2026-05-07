@@ -109,6 +109,7 @@ export function CallDetailClient({
   const transcriptLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transcriptLongPressTriggered = useRef(false);
   const searchParams = useSearchParams();
+  const router = useRouter();
   const isOwnCall = viewer.id === call.repId;
   const canCoach = viewer.role === "manager" || !isOwnCall;
   const notesByUtteranceIndex = useMemo(
@@ -270,6 +271,23 @@ export function CallDetailClient({
     return closest;
   }
 
+  async function deleteConversation() {
+    if (viewer.role !== "manager") return;
+    const confirmed = window.confirm(
+      "Delete this conversation? This removes the recording, transcript, analysis, and coaching notes for everyone on the team."
+    );
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/calls/${call.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      window.alert(body.error ?? "Delete failed");
+      return;
+    }
+    router.push("/calls");
+    router.refresh();
+  }
+
   return (
     <>
     <div className={`space-y-6 max-w-6xl ${call.audioUrl ? "pb-24" : ""}`}>
@@ -296,6 +314,18 @@ export function CallDetailClient({
 
         <div className="flex items-center gap-3">
           <ShareButton callId={call.id} />
+          {viewer.role === "manager" && (
+            <button
+              type="button"
+              onClick={deleteConversation}
+              className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-500/20 transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12m-9 0V5a2 2 0 012-2h2a2 2 0 012 2v2m-8 0v12m4-12v12m4-12l-1 12a2 2 0 01-2 2H9a2 2 0 01-2-2L6 7" />
+              </svg>
+              Delete
+            </button>
+          )}
           {analysis && (
           <div className="text-right">
             <div

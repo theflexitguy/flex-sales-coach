@@ -4,14 +4,45 @@ import type { AudioStatus } from "expo-audio";
 
 type Player = InstanceType<typeof AudioModule.AudioPlayer>;
 
-export function useAudioPlayer(audioUrl: string | null) {
+interface LockScreenMetadata {
+  title: string;
+  artist?: string;
+  albumTitle?: string;
+  artworkUrl?: string;
+}
+
+type LockScreenCapablePlayer = Player & {
+  setActiveForLockScreen?: (
+    active: boolean,
+    metadata?: LockScreenMetadata,
+    options?: {
+      showSeekBackward?: boolean;
+      showSeekForward?: boolean;
+      isLiveStream?: boolean;
+    }
+  ) => void;
+  updateLockScreenMetadata?: (metadata: LockScreenMetadata) => void;
+};
+
+export function useAudioPlayer(audioUrl: string | null, metadata?: LockScreenMetadata) {
   const source = useMemo(
     () => (audioUrl ? { uri: audioUrl } : null),
     [audioUrl]
   );
 
   const playerRef = useRef<Player | null>(null);
+  const metadataRef = useRef<LockScreenMetadata | undefined>(metadata);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    metadataRef.current = metadata;
+    const player = playerRef.current as LockScreenCapablePlayer | null;
+    if (metadata && player?.updateLockScreenMetadata) {
+      try {
+        player.updateLockScreenMetadata(metadata);
+      } catch { /* ignore */ }
+    }
+  }, [metadata]);
 
   useEffect(() => {
     if (!source) {
@@ -26,6 +57,7 @@ export function useAudioPlayer(audioUrl: string | null) {
 
     return () => {
       try {
+        (p as LockScreenCapablePlayer).setActiveForLockScreen?.(false);
         p.pause();
         p.remove();
       } catch { /* ignore */ }
@@ -66,9 +98,35 @@ export function useAudioPlayer(audioUrl: string | null) {
   useEffect(() => {
     if (!hasSetMode.current && audioUrl) {
       hasSetMode.current = true;
-      setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+      setAudioModeAsync({
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: "doNotMix",
+      }).catch(() => {});
     }
   }, [audioUrl]);
+
+  const activateLockScreen = useCallback(() => {
+    const player = playerRef.current as LockScreenCapablePlayer | null;
+    if (!player?.setActiveForLockScreen) return;
+    try {
+      player.setActiveForLockScreen(
+        true,
+        metadataRef.current,
+        {
+          showSeekBackward: true,
+          showSeekForward: true,
+        }
+      );
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!status.didJustFinish) return;
+    try {
+      (playerRef.current as LockScreenCapablePlayer | null)?.setActiveForLockScreen?.(false);
+    } catch { /* ignore */ }
+  }, [status.didJustFinish]);
 
   const positionMs = (status.currentTime ?? 0) * 1000;
   const durationMs = (status.duration ?? 0) * 1000;
@@ -76,8 +134,9 @@ export function useAudioPlayer(audioUrl: string | null) {
 
   // All callbacks read from playerRef.current at call time, not capture time
   const play = useCallback(() => {
+    activateLockScreen();
     playerRef.current?.play();
-  }, []);
+  }, [activateLockScreen]);
 
   const pause = useCallback(() => {
     playerRef.current?.pause();
@@ -87,8 +146,11 @@ export function useAudioPlayer(audioUrl: string | null) {
     const p = playerRef.current;
     if (!p) return;
     if (p.playing) p.pause();
-    else p.play();
-  }, []);
+    else {
+      activateLockScreen();
+      p.play();
+    }
+  }, [activateLockScreen]);
 
   const seekTo = useCallback((ms: number) => {
     playerRef.current?.seekTo(ms / 1000);

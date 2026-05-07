@@ -26,7 +26,7 @@ import { CallAIChat } from "../../../components/chat/call-ai-chat";
 import { SkeletonList } from "../../../components/ui/skeleton";
 import { ErrorState } from "../../../components/ui/error-state";
 import { haptic } from "../../../lib/haptics";
-import { apiGet, apiPost } from "../../../services/api";
+import { apiDelete, apiGet, apiPost } from "../../../services/api";
 import { reverseGeocode } from "../../../services/location";
 import { VoiceNoteRecorder } from "../../../components/calls/voice-note-recorder";
 import { VoiceNotePlayer } from "../../../components/calls/voice-note-player";
@@ -141,7 +141,16 @@ export default function CallDetailScreen() {
 
   const navigation = useNavigation();
   const router = useRouter();
-  const audioPlayer = useAudioPlayer(data?.call.audioUrl ?? null);
+  const audioPlayer = useAudioPlayer(
+    data?.call.audioUrl ?? null,
+    data
+      ? {
+          title: data.call.customerName ?? "Conversation",
+          artist: "Koachr",
+          albumTitle: "Sales Conversation",
+        }
+      : undefined
+  );
   const [address, setAddress] = useState<string | null>(null);
   const profile = useAuthStore((s) => s.profile);
   const isManager = profile?.role === "manager";
@@ -150,7 +159,31 @@ export default function CallDetailScreen() {
   const [selectedShareIds, setSelectedShareIds] = useState<Set<string>>(new Set());
   const [sharing, setSharing] = useState(false);
 
-  // Set header with back button + share button for managers
+  const handleDeleteCall = useCallback(() => {
+    if (!data?.call.id) return;
+    Alert.alert(
+      "Delete conversation?",
+      "This removes the recording, transcript, analysis, and coaching notes for everyone on the team.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await apiDelete(`/api/mobile/calls/${data.call.id}`);
+              haptic.success();
+              router.replace("/(tabs)/calls");
+            } catch (err: unknown) {
+              Alert.alert("Error", err instanceof Error ? err.message : "Failed to delete conversation");
+            }
+          },
+        },
+      ]
+    );
+  }, [data?.call.id, router]);
+
+  // Set header with back button + manager actions
   useEffect(() => {
     navigation.setOptions({
       title: data?.call.customerName ?? "Conversation",
@@ -161,20 +194,25 @@ export default function CallDetailScreen() {
         </TouchableOpacity>
       ),
       headerRight: isManager ? () => (
-        <TouchableOpacity
-          onPress={async () => {
-            const res = await apiGet<{ members: Array<{ id: string; fullName: string; role: string }> }>("/api/mobile/team-members");
-            setTeamMembers(res.members);
-            setSelectedShareIds(new Set());
-            setShareModal(true);
-          }}
-          style={{ marginLeft: 8 }}
-        >
-          <Ionicons name="share-outline" size={22} color="#35b2ff" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+          <TouchableOpacity
+            onPress={async () => {
+              const res = await apiGet<{ members: Array<{ id: string; fullName: string; role: string }> }>("/api/mobile/team-members");
+              setTeamMembers(res.members);
+              setSelectedShareIds(new Set());
+              setShareModal(true);
+            }}
+            hitSlop={8}
+          >
+            <Ionicons name="share-outline" size={22} color="#35b2ff" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleDeleteCall} hitSlop={8}>
+            <Ionicons name="trash-outline" size={21} color="#f87171" />
+          </TouchableOpacity>
+        </View>
       ) : undefined,
     });
-  }, [data?.call.customerName, navigation, router, isManager]);
+  }, [data?.call.customerName, handleDeleteCall, navigation, router, isManager]);
 
   // Reverse geocode location
   useEffect(() => {

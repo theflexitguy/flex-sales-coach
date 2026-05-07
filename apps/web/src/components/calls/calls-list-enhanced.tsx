@@ -41,6 +41,7 @@ export function CallsListEnhanced({ reps, isManager }: { reps: Rep[]; isManager:
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchCalls = useCallback(async () => {
     setLoading(true);
@@ -85,6 +86,33 @@ export function CallsListEnhanced({ reps, isManager }: { reps: Rep[]; isManager:
   function exitSelectionMode() {
     setSelectionMode(false);
     setSelectedIds(new Set());
+  }
+
+  async function deleteSelectedCalls() {
+    if (!isManager || selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    const confirmed = window.confirm(
+      `Delete ${count} conversation${count === 1 ? "" : "s"}? This removes recordings, transcripts, analysis, and coaching notes for everyone.`
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      const responses = await Promise.all(
+        [...selectedIds].map((id) => fetch(`/api/calls/${id}`, { method: "DELETE" }))
+      );
+      const failed = responses.find((res) => !res.ok);
+      if (failed) {
+        const body = await failed.json().catch(() => ({ error: failed.statusText }));
+        throw new Error(body.error ?? "Delete failed");
+      }
+      await fetchCalls();
+      exitSelectionMode();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const allSelected = calls.length > 0 && selectedIds.size === calls.length;
@@ -318,6 +346,18 @@ export function CallsListEnhanced({ reps, isManager }: { reps: Rep[]; isManager:
               </svg>
               Share
             </button>
+            {isManager && (
+              <button
+                onClick={deleteSelectedCalls}
+                disabled={deleting}
+                className="flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12m-9 0V5a2 2 0 012-2h2a2 2 0 012 2v2m-8 0v12m4-12v12m4-12l-1 12a2 2 0 01-2 2H9a2 2 0 01-2-2L6 7" />
+                </svg>
+                {deleting ? "Deleting..." : "Delete"}
+              </button>
+            )}
             <button
               onClick={exitSelectionMode}
               className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"

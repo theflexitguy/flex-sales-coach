@@ -71,3 +71,16 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   }
   return res.json();
 }
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(apiUrl(path), {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? "Request failed");
+  }
+  return res.json();
+}

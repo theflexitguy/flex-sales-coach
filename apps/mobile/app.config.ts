@@ -35,7 +35,7 @@ const config: ExpoConfig = {
         "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "38",
+    buildNumber: "39",
   },
   android: {
     adaptiveIcon: {
@@ -48,8 +48,10 @@ const config: ExpoConfig = {
     permissions: [
       "RECORD_AUDIO",
       "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
       "android.permission.RECORD_AUDIO",
       "android.permission.MODIFY_AUDIO_SETTINGS",
+      "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
     ],
   },
   plugins: [
@@ -59,6 +61,7 @@ const config: ExpoConfig = {
       {
         microphonePermission:
           "Flex Sales Coach needs microphone access to record sales conversations for coaching.",
+        enableBackgroundPlayback: true,
       },
     ],
     // Native AVAudioSession interruption observer. Fires on phone calls,

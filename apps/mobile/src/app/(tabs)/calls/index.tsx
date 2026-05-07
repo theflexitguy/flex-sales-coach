@@ -8,11 +8,17 @@ import {
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { apiGet, apiPost } from "../../../services/api";
-import { useCachedFetch } from "../../../hooks/useCachedFetch";
+import { apiGet, apiPatch, apiPost } from "../../../services/api";
+import { invalidateCachePrefix, useCachedFetch } from "../../../hooks/useCachedFetch";
 import { useAuthStore } from "../../../stores/auth-store";
 
 interface CallItem {
@@ -23,6 +29,8 @@ interface CallItem {
   durationSeconds: number;
   status: string;
   recordedAt: string;
+  folderId: string | null;
+  folderName: string | null;
   overallScore: number | null;
   overallGrade: string | null;
   summary: string | null;
@@ -44,6 +52,14 @@ interface TeamMember {
   role: string;
 }
 
+interface CallFolder {
+  id: string;
+  name: string;
+  color: string;
+  callCount: number;
+  createdAt: string;
+}
+
 export default function CallsListScreen() {
   const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
@@ -51,6 +67,13 @@ export default function CallsListScreen() {
   const [filter, setFilter] = useState<CallsFilter>("mine");
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+  const [folders, setFolders] = useState<CallFolder[]>([]);
+  const [folderFilter, setFolderFilter] = useState<string>("all");
+  const [folderModalVisible, setFolderModalVisible] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [moveCall, setMoveCall] = useState<CallItem | null>(null);
+  const [movingCall, setMovingCall] = useState(false);
 
   // Load team members when switching to team view
   const teamLoaded = useRef(false);
@@ -63,9 +86,29 @@ export default function CallsListScreen() {
     }
   }, [filter, isManager]);
 
+  async function loadFolders() {
+    try {
+      const res = await apiGet<{ folders: CallFolder[] }>("/api/mobile/call-folders");
+      setFolders(res.folders);
+    } catch {
+      // Folder organization is optional; don't block the call list.
+    }
+  }
+
+  useEffect(() => {
+    if (filter === "mine") {
+      loadFolders();
+    } else {
+      setFolderFilter("all");
+    }
+  }, [filter]);
+
+  const folderQuery = filter === "mine" && folderFilter !== "all"
+    ? `&folderId=${encodeURIComponent(folderFilter)}`
+    : "";
   const { data, loading, refreshing, refresh } = useCachedFetch(
-    `calls-list-${filter}`,
-    () => apiGet<{ calls: CallItem[] }>(`/api/mobile/calls?limit=50&filter=${filter}`)
+    `calls-list-${filter}-${folderFilter}`,
+    () => apiGet<{ calls: CallItem[] }>(`/api/mobile/calls?limit=50&filter=${filter}${folderQuery}`)
   );
 
   // Self-heal: on mount, ask the server to re-run split on any of this
@@ -111,6 +154,40 @@ export default function CallsListScreen() {
       hour: "numeric",
       minute: "2-digit",
     });
+  }
+
+  async function createFolder() {
+    const name = folderName.trim();
+    if (!name) return;
+    setCreatingFolder(true);
+    try {
+      const res = await apiPost<{ folder: CallFolder }>("/api/mobile/call-folders", { name });
+      setFolders((prev) => [...prev, res.folder]);
+      setFolderName("");
+      setFolderModalVisible(false);
+      setFolderFilter(res.folder.id);
+      invalidateCachePrefix("calls-list-mine");
+      refresh();
+    } catch (err: unknown) {
+      Alert.alert("Folder not created", err instanceof Error ? err.message : "Failed to create folder");
+    } finally {
+      setCreatingFolder(false);
+    }
+  }
+
+  async function moveCallToFolder(folderId: string | null) {
+    if (!moveCall) return;
+    setMovingCall(true);
+    try {
+      await apiPatch(`/api/mobile/calls/${moveCall.id}/folder`, { folderId });
+      setMoveCall(null);
+      invalidateCachePrefix("calls-list-");
+      await Promise.all([loadFolders(), refresh()]);
+    } catch (err: unknown) {
+      Alert.alert("Could not move conversation", err instanceof Error ? err.message : "Failed to move conversation");
+    } finally {
+      setMovingCall(false);
+    }
   }
 
   if (loading) {
@@ -181,6 +258,56 @@ export default function CallsListScreen() {
                 ))}
             </ScrollView>
           )}
+          {filter === "mine" && (
+            <View style={styles.folderSection}>
+              <View style={styles.folderHeader}>
+                <Text style={styles.folderTitle}>Folders</Text>
+                <TouchableOpacity
+                  style={styles.folderCreateButton}
+                  onPress={() => setFolderModalVisible(true)}
+                >
+                  <Ionicons name="add" size={14} color="#35b2ff" />
+                  <Text style={styles.folderCreateText}>New</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.folderChips}
+              >
+                <TouchableOpacity
+                  style={[styles.folderChip, folderFilter === "all" && styles.folderChipActive]}
+                  onPress={() => setFolderFilter("all")}
+                >
+                  <Ionicons name="albums-outline" size={14} color={folderFilter === "all" ? "#35b2ff" : "#71717a"} />
+                  <Text style={[styles.folderChipText, folderFilter === "all" && styles.folderChipTextActive]}>All</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.folderChip, folderFilter === "unfiled" && styles.folderChipActive]}
+                  onPress={() => setFolderFilter("unfiled")}
+                >
+                  <Ionicons name="file-tray-outline" size={14} color={folderFilter === "unfiled" ? "#35b2ff" : "#71717a"} />
+                  <Text style={[styles.folderChipText, folderFilter === "unfiled" && styles.folderChipTextActive]}>Unfiled</Text>
+                </TouchableOpacity>
+                {folders.map((folder) => {
+                  const active = folderFilter === folder.id;
+                  return (
+                    <TouchableOpacity
+                      key={folder.id}
+                      style={[styles.folderChip, active && styles.folderChipActive]}
+                      onPress={() => setFolderFilter(folder.id)}
+                    >
+                      <View style={[styles.folderDot, { backgroundColor: folder.color }]} />
+                      <Text style={[styles.folderChipText, active && styles.folderChipTextActive]} numberOfLines={1}>
+                        {folder.name}
+                      </Text>
+                      <Text style={styles.folderCount}>{folder.callCount}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
         </View>
       }
       ListEmptyComponent={
@@ -216,21 +343,40 @@ export default function CallsListScreen() {
                 {filter === "team" && item.repName ? `${item.repName} · ` : ""}
                 {formatDate(item.recordedAt)} · {formatDuration(item.durationSeconds)}
               </Text>
+              {filter === "mine" && item.folderName && (
+                <View style={styles.callFolderBadge}>
+                  <Ionicons name="folder-outline" size={12} color="#35b2ff" />
+                  <Text style={styles.callFolderBadgeText}>{item.folderName}</Text>
+                </View>
+              )}
             </View>
-            {item.overallScore != null ? (
-              <View style={styles.scoreBadge}>
-                <Text
-                  style={[
-                    styles.scoreText,
-                    { color: GRADE_COLORS[item.overallGrade ?? ""] ?? "#a1a1aa" },
-                  ]}
+            <View style={styles.cardActions}>
+              {filter === "mine" && (
+                <TouchableOpacity
+                  style={styles.cardIconButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setMoveCall(item);
+                  }}
                 >
-                  {item.overallScore}
-                </Text>
-              </View>
-            ) : (
-              <StatusBadge status={item.status} />
-            )}
+                  <Ionicons name="folder-open-outline" size={18} color="#a1a1aa" />
+                </TouchableOpacity>
+              )}
+              {item.overallScore != null ? (
+                <View style={styles.scoreBadge}>
+                  <Text
+                    style={[
+                      styles.scoreText,
+                      { color: GRADE_COLORS[item.overallGrade ?? ""] ?? "#a1a1aa" },
+                    ]}
+                  >
+                    {item.overallScore}
+                  </Text>
+                </View>
+              ) : (
+                <StatusBadge status={item.status} />
+              )}
+            </View>
           </View>
           {item.summary && (
             <Text style={styles.summary} numberOfLines={2}>
@@ -239,7 +385,152 @@ export default function CallsListScreen() {
           )}
         </TouchableOpacity>
       )}
+      ListFooterComponent={
+        <>
+          <CreateFolderModal
+            visible={folderModalVisible}
+            name={folderName}
+            saving={creatingFolder}
+            onNameChange={setFolderName}
+            onCancel={() => {
+              setFolderModalVisible(false);
+              setFolderName("");
+            }}
+            onCreate={createFolder}
+          />
+          <MoveCallModal
+            call={moveCall}
+            folders={folders}
+            moving={movingCall}
+            onClose={() => setMoveCall(null)}
+            onMove={moveCallToFolder}
+            onCreateFolder={() => {
+              setMoveCall(null);
+              setFolderModalVisible(true);
+            }}
+          />
+        </>
+      }
     />
+  );
+}
+
+function CreateFolderModal({
+  visible,
+  name,
+  saving,
+  onNameChange,
+  onCancel,
+  onCreate,
+}: {
+  visible: boolean;
+  name: string;
+  saving: boolean;
+  onNameChange: (value: string) => void;
+  onCancel: () => void;
+  onCreate: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide">
+      <KeyboardAvoidingView
+        style={styles.modalOverlay}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={onCancel} />
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>New Folder</Text>
+          <TextInput
+            style={styles.modalInput}
+            value={name}
+            onChangeText={onNameChange}
+            placeholder="Folder name"
+            placeholderTextColor="#71717a"
+            autoFocus
+            maxLength={80}
+            returnKeyType="done"
+            onSubmitEditing={onCreate}
+          />
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancelButton} onPress={onCancel}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalPrimaryButton, (saving || !name.trim()) && { opacity: 0.5 }]}
+              disabled={saving || !name.trim()}
+              onPress={onCreate}
+            >
+              <Text style={styles.modalPrimaryText}>{saving ? "Creating..." : "Create"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function MoveCallModal({
+  call,
+  folders,
+  moving,
+  onClose,
+  onMove,
+  onCreateFolder,
+}: {
+  call: CallItem | null;
+  folders: CallFolder[];
+  moving: boolean;
+  onClose: () => void;
+  onMove: (folderId: string | null) => void;
+  onCreateFolder: () => void;
+}) {
+  return (
+    <Modal visible={!!call} transparent animationType="slide">
+      <View style={styles.modalOverlay}>
+        <Pressable style={styles.modalBackdrop} onPress={onClose} />
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Move Conversation</Text>
+          <Text style={styles.modalSubtitle} numberOfLines={1}>
+            {call?.customerName ?? "Unknown Customer"}
+          </Text>
+
+          <TouchableOpacity
+            style={styles.folderOption}
+            disabled={moving}
+            onPress={() => onMove(null)}
+          >
+            <Ionicons name="file-tray-outline" size={18} color="#a1a1aa" />
+            <Text style={styles.folderOptionText}>Unfiled</Text>
+            {!call?.folderId && <Ionicons name="checkmark" size={18} color="#35b2ff" />}
+          </TouchableOpacity>
+
+          {folders.map((folder) => (
+            <TouchableOpacity
+              key={folder.id}
+              style={styles.folderOption}
+              disabled={moving}
+              onPress={() => onMove(folder.id)}
+            >
+              <View style={[styles.folderDot, { backgroundColor: folder.color }]} />
+              <Text style={styles.folderOptionText}>{folder.name}</Text>
+              {call?.folderId === folder.id && <Ionicons name="checkmark" size={18} color="#35b2ff" />}
+            </TouchableOpacity>
+          ))}
+
+          <TouchableOpacity
+            style={[styles.folderOption, styles.folderOptionCreate]}
+            disabled={moving}
+            onPress={onCreateFolder}
+          >
+            <Ionicons name="add-circle-outline" size={18} color="#35b2ff" />
+            <Text style={[styles.folderOptionText, { color: "#35b2ff" }]}>Create new folder</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.modalFullCancel} onPress={onClose}>
+            <Text style={styles.modalCancelText}>{moving ? "Moving..." : "Cancel"}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -307,6 +598,46 @@ const styles = StyleSheet.create({
   },
   repChipText: { color: "#71717a", fontSize: 13, fontWeight: "500" },
   repChipTextActive: { color: "#35b2ff" },
+  folderSection: { paddingTop: 6, paddingBottom: 2 },
+  folderHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  folderTitle: { color: "#a1a1aa", fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
+  folderCreateButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: "rgba(53,178,255,0.08)",
+  },
+  folderCreateText: { color: "#35b2ff", fontSize: 12, fontWeight: "600" },
+  folderChips: { paddingHorizontal: 16, gap: 8, paddingBottom: 4 },
+  folderChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    backgroundColor: "#111113",
+  },
+  folderChipActive: {
+    backgroundColor: "rgba(53,178,255,0.1)",
+    borderColor: "rgba(53,178,255,0.35)",
+  },
+  folderChipText: { color: "#a1a1aa", fontSize: 13, fontWeight: "500", maxWidth: 110 },
+  folderChipTextActive: { color: "#35b2ff" },
+  folderDot: { width: 8, height: 8, borderRadius: 4 },
+  folderCount: { color: "#52525b", fontSize: 11, fontWeight: "600" },
   card: {
     marginHorizontal: 16,
     marginTop: 12,
@@ -317,8 +648,29 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   cardHeader: { flexDirection: "row", alignItems: "center" },
+  cardActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  cardIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#27272a",
+  },
   customerName: { color: "#fff", fontSize: 16, fontWeight: "600" },
   meta: { color: "#71717a", fontSize: 13, marginTop: 2 },
+  callFolderBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    alignSelf: "flex-start",
+    marginTop: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: "rgba(53,178,255,0.08)",
+  },
+  callFolderBadgeText: { color: "#35b2ff", fontSize: 11, fontWeight: "600" },
   scoreBadge: {
     width: 48,
     height: 48,
@@ -331,4 +683,70 @@ const styles = StyleSheet.create({
   statusBadge: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
   statusText: { fontSize: 12, fontWeight: "600" },
   summary: { color: "#a1a1aa", fontSize: 13, lineHeight: 18, marginTop: 8 },
+  modalOverlay: { flex: 1, justifyContent: "flex-end" },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.7)" },
+  modalContent: {
+    backgroundColor: "#18181b",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    padding: 20,
+    paddingBottom: Platform.OS === "ios" ? 36 : 20,
+    gap: 10,
+  },
+  modalTitle: { color: "#fff", fontSize: 20, fontWeight: "700" },
+  modalSubtitle: { color: "#71717a", fontSize: 13, marginBottom: 4 },
+  modalInput: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    backgroundColor: "#09090b",
+    color: "#fff",
+    paddingHorizontal: 14,
+    fontSize: 16,
+  },
+  modalActions: { flexDirection: "row", gap: 12, marginTop: 4 },
+  modalCancelButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    borderRadius: 12,
+    padding: 14,
+    alignItems: "center",
+  },
+  modalPrimaryButton: {
+    flex: 1,
+    backgroundColor: "#35b2ff",
+    borderRadius: 12,
+    padding: 14,
+    alignItems: "center",
+  },
+  modalCancelText: { color: "#d4d4d8", fontSize: 15, fontWeight: "600" },
+  modalPrimaryText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  modalFullCancel: {
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    borderRadius: 12,
+    padding: 14,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  folderOption: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    backgroundColor: "#111113",
+    paddingHorizontal: 14,
+  },
+  folderOptionCreate: {
+    borderColor: "rgba(53,178,255,0.22)",
+    backgroundColor: "rgba(53,178,255,0.06)",
+  },
+  folderOptionText: { color: "#e4e4e7", fontSize: 15, fontWeight: "600", flex: 1 },
 });

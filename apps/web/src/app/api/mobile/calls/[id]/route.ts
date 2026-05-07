@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { durationFromTranscriptUtterances } from "@/lib/call-duration";
+import { deleteCallForManager } from "@/lib/call-delete";
 
 export async function GET(
   request: Request,
@@ -167,4 +168,18 @@ export async function GET(
       })),
     })),
   });
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const auth = await authenticateRequest(request);
+  if (!auth) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const result = await deleteCallForManager(auth, id);
+  return NextResponse.json(result.body, { status: result.status });
 }

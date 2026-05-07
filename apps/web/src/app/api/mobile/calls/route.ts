@@ -12,6 +12,7 @@ export async function GET(request: Request) {
   const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
   const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
   const filter = url.searchParams.get("filter") ?? "mine"; // "mine" | "team" | "shared"
+  const folderId = url.searchParams.get("folderId");
 
   const { supabase, profile } = auth;
   const isManager = profile?.role === "manager";
@@ -30,6 +31,11 @@ export async function GET(request: Request) {
   } else {
     // Default: own calls only
     query = query.eq("rep_id", auth.user.id);
+    if (folderId === "unfiled") {
+      query = query.is("folder_id", null);
+    } else if (folderId) {
+      query = query.eq("folder_id", folderId);
+    }
   }
 
   const { data: calls, count } = await query
@@ -38,10 +44,16 @@ export async function GET(request: Request) {
 
   // Get rep names for team/shared views
   const repIds = [...new Set((calls ?? []).map((c) => c.rep_id))];
+  const folderIds = [...new Set((calls ?? []).map((c) => c.folder_id).filter(Boolean))];
   const repNameMap: Record<string, string> = {};
+  const folderNameMap: Record<string, string> = {};
   if (repIds.length > 0) {
     const { data: profiles } = await supabase.from("profiles").select("id, full_name").in("id", repIds);
     for (const p of profiles ?? []) repNameMap[p.id] = p.full_name;
+  }
+  if (folderIds.length > 0) {
+    const { data: folders } = await supabase.from("call_folders").select("id, name").in("id", folderIds);
+    for (const f of folders ?? []) folderNameMap[f.id] = f.name;
   }
 
   const durationByCallId = new Map<string, number>();
@@ -88,6 +100,8 @@ export async function GET(request: Request) {
         recordedAt: call.recorded_at,
         sessionId: call.session_id,
         sessionOrder: call.session_order,
+        folderId: call.folder_id ?? null,
+        folderName: call.folder_id ? folderNameMap[call.folder_id] ?? null : null,
         overallScore: analysis?.overall_score ?? null,
         overallGrade: analysis?.overall_grade ?? null,
         summary: analysis?.summary ?? null,
