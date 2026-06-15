@@ -1,4 +1,4 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { analyzeRoleplaySession } from "@/lib/roleplay-analysis";
@@ -11,6 +11,8 @@ interface ClientTranscriptLine {
   readonly startMs?: unknown;
   readonly endMs?: unknown;
 }
+
+type AnalysisRow = Record<string, unknown>;
 
 function sanitizeTranscript(value: unknown): Array<{ speaker: string; text: string; startMs: number; endMs: number }> {
   if (!Array.isArray(value)) return [];
@@ -43,6 +45,22 @@ function sanitizeTranscript(value: unknown): Array<{ speaker: string; text: stri
 function sanitizeDuration(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(7200, Math.round(value)));
+}
+
+function mapAnalysis(row: AnalysisRow | null) {
+  if (!row) return null;
+
+  return {
+    overallScore: row.overall_score,
+    overallGrade: row.overall_grade,
+    summary: row.summary,
+    strengths: Array.isArray(row.strengths) ? row.strengths : [],
+    improvements: Array.isArray(row.improvements) ? row.improvements : [],
+    objectionHandlingScores: Array.isArray(row.objection_handling_scores)
+      ? row.objection_handling_scores
+      : [],
+    comparedToReal: row.compared_to_real ?? null,
+  };
 }
 
 export async function POST(
@@ -94,26 +112,42 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Trigger analysis after the response without relying on fire-and-forget fetch.
+  let analysisStatus: "complete" | "processing" | "failed" | "unavailable" =
+    transcriptText ? "processing" : "unavailable";
+  let analysisError: string | null = null;
+
   if (transcriptText) {
-    after(async () => {
-      try {
-        await analyzeRoleplaySession(id);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "unknown";
-        console.error(JSON.stringify({
-          route: "/api/roleplay/sessions/[id]/end",
-          reason: "analysis_failed_in_after",
-          sessionId: id,
-          message,
-        }));
-      }
-    });
+    try {
+      await analyzeRoleplaySession(id);
+      analysisStatus = "complete";
+    } catch (err) {
+      analysisStatus = "failed";
+      analysisError = err instanceof Error ? err.message : "Roleplay analysis failed";
+      console.error(JSON.stringify({
+        route: "/api/roleplay/sessions/[id]/end",
+        reason: "analysis_failed",
+        sessionId: id,
+        message: analysisError,
+      }));
+    }
   }
+
+  const { data: analysisRow } = transcriptText
+    ? await admin
+      .from("roleplay_analyses")
+      .select("*")
+      .eq("session_id", id)
+      .maybeSingle()
+    : { data: null };
+
+  if (analysisRow) analysisStatus = "complete";
 
   return NextResponse.json({
     sessionId: id,
     durationSeconds,
     hasTranscript: !!transcriptText,
+    analysis: mapAnalysis((analysisRow as AnalysisRow | null) ?? null),
+    analysisStatus,
+    analysisError,
   });
 }

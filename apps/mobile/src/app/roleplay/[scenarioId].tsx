@@ -63,8 +63,8 @@ export default function RoleplaySessionScreen() {
 
   const {
     phase, personaName, agentSpeaking, transcript,
-    duration, result, errorMessage,
-    startSession, endSession, reset,
+    duration, result, errorMessage, speakerEnabled,
+    startSession, endSession, setSpeakerEnabled, reset,
   } = useRoleplaySession();
 
   // Load scenario details
@@ -81,16 +81,32 @@ export default function RoleplaySessionScreen() {
   // Poll for analysis after completion
   useEffect(() => {
     if (phase !== "completed" || !result?.sessionId) return;
+    setAnalysis(null);
+
+    if (result.analysis) {
+      setAnalysis(result.analysis);
+      setLoadingAnalysis(false);
+      setAnalysisDelayed(false);
+      return;
+    }
+
+    if (!result.hasTranscript) {
+      setAnalysis(null);
+      setLoadingAnalysis(false);
+      setAnalysisDelayed(true);
+      return;
+    }
+
     setLoadingAnalysis(true);
     setAnalysisDelayed(false);
 
     let pollCount = 0;
-    let recoveryRequested = false;
+    let recoveryRequested = result.analysisStatus === "failed";
 
     const pollInterval = setInterval(async () => {
       try {
         pollCount += 1;
-        const shouldRecoverAnalysis = pollCount >= 10 && !recoveryRequested;
+        const shouldRecoverAnalysis = recoveryRequested || pollCount >= 2;
         if (shouldRecoverAnalysis) recoveryRequested = true;
 
         const data = await apiGet<{ analysis: AnalysisResult | null; analysisStatus?: string }>(
@@ -121,7 +137,7 @@ export default function RoleplaySessionScreen() {
       clearTimeout(slowNotice);
       clearTimeout(timeout);
     };
-  }, [phase, result?.sessionId]);
+  }, [phase, result]);
 
   const formatDuration = (s: number) =>
     `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
@@ -230,6 +246,24 @@ export default function RoleplaySessionScreen() {
           </View>
 
           <Text style={styles.timer}>{formatDuration(duration)}</Text>
+
+          <TouchableOpacity
+            style={[styles.speakerBtn, speakerEnabled && styles.speakerBtnActive]}
+            onPress={() => {
+              haptic.light();
+              setSpeakerEnabled(!speakerEnabled);
+            }}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={speakerEnabled ? "volume-high" : "phone-portrait-outline"}
+              size={18}
+              color={speakerEnabled ? "#000" : "#a1a1aa"}
+            />
+            <Text style={[styles.speakerBtnText, speakerEnabled && styles.speakerBtnTextActive]}>
+              {speakerEnabled ? "Speaker" : "Earpiece"}
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.endBtn}
@@ -353,7 +387,13 @@ export default function RoleplaySessionScreen() {
           )}
         </View>
       ) : (
-        <Text style={styles.noAnalysis}>Analysis is still processing. Check History shortly.</Text>
+        <Text style={styles.noAnalysis}>
+          {result?.hasTranscript === false
+            ? "Transcript was not captured, so this session could not be scored."
+            : result?.analysisStatus === "failed"
+              ? "Analysis did not finish. Open this session from History to retry."
+            : "Analysis is still processing. Check History shortly."}
+        </Text>
       )}
 
       {/* Actions */}
@@ -438,6 +478,14 @@ const styles = StyleSheet.create({
   speakingDotActive: { backgroundColor: "#22c55e" },
   speakingLabel: { color: "#71717a", fontSize: 13 },
   timer: { color: "#fff", fontSize: 28, fontWeight: "700", fontFamily: "monospace" },
+  speakerBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    borderWidth: 1, borderColor: "#3f3f46", borderRadius: 999,
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  speakerBtnActive: { backgroundColor: "#35b2ff", borderColor: "#35b2ff" },
+  speakerBtnText: { color: "#a1a1aa", fontSize: 13, fontWeight: "700" },
+  speakerBtnTextActive: { color: "#000" },
   endBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
     backgroundColor: "#ef4444", borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, width: "100%",

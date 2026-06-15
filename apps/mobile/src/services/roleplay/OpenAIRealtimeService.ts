@@ -33,6 +33,7 @@ interface OpenAIRealtimeCallbacks {
 interface ConnectOptions {
   readonly clientSecret: string;
   readonly model: string;
+  readonly speakerEnabled?: boolean;
 }
 
 type DataChannel = ReturnType<RTCPeerConnection["createDataChannel"]>;
@@ -77,6 +78,7 @@ export class OpenAIRealtimeService {
   private readonly startedAt = Date.now();
   private readonly assistantTranscriptBuffers = new Map<string, string>();
   private lastTranscriptKey = "";
+  private speakerEnabled = true;
 
   constructor(callbacks: OpenAIRealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -85,14 +87,10 @@ export class OpenAIRealtimeService {
 
   async connect(options: ConnectOptions): Promise<void> {
     this.setStatus("connecting");
+    this.speakerEnabled = options.speakerEnabled ?? true;
 
     try {
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: true,
-        shouldPlayInBackground: false,
-        interruptionMode: "duckOthers",
-      });
+      await this.applyActiveAudioMode();
 
       const pc = new RTCPeerConnection();
       this.peerConnection = pc;
@@ -167,6 +165,11 @@ export class OpenAIRealtimeService {
     return this.status;
   }
 
+  async setSpeakerEnabled(enabled: boolean): Promise<void> {
+    this.speakerEnabled = enabled;
+    await this.applyActiveAudioMode();
+  }
+
   async disconnect(): Promise<void> {
     if (this.dataChannel) {
       try {
@@ -189,9 +192,23 @@ export class OpenAIRealtimeService {
       this.peerConnection = null;
     }
 
-    await setAudioModeAsync({ allowsRecording: false, shouldPlayInBackground: false });
+    await setAudioModeAsync({
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+    });
     this.callbacks.onAgentSpeaking(false);
     this.setStatus("closed");
+  }
+
+  private async applyActiveAudioMode(): Promise<void> {
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: true,
+      shouldPlayInBackground: false,
+      interruptionMode: "duckOthers",
+      shouldRouteThroughEarpiece: !this.speakerEnabled,
+    });
   }
 
   private handleServerEvent(raw: string): void {

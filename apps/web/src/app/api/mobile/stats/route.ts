@@ -3,6 +3,16 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { BADGES } from "@flex/shared";
 
+const OUTCOME_DEFS = [
+  { value: "sale", label: "Won", color: "#22c55e" },
+  { value: "no_sale", label: "Lost", color: "#ef4444" },
+  { value: "callback", label: "Callback", color: "#35b2ff" },
+  { value: "not_home", label: "Not Home", color: "#71717a" },
+  { value: "not_interested", label: "Not Interested", color: "#f97316" },
+  { value: "already_has_service", label: "Has Service", color: "#8b5cf6" },
+  { value: "pending", label: "Pending", color: "#3f3f46" },
+];
+
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -44,6 +54,26 @@ export async function GET(request: Request) {
     .select("id", { count: "exact" })
     .eq("rep_id", repId)
     .eq("status", "completed");
+
+  const { data: recentCalls } = await admin
+    .from("calls")
+    .select("outcome, status, recorded_at")
+    .eq("rep_id", repId)
+    .eq("status", "completed")
+    .gte("recorded_at", `${thirtyDaysAgo}T00:00:00`);
+
+  const outcomeCounts: Record<string, number> = Object.fromEntries(
+    OUTCOME_DEFS.map((outcome) => [outcome.value, 0])
+  );
+  for (const call of recentCalls ?? []) {
+    const key = call.outcome && outcomeCounts[call.outcome] != null ? call.outcome : "pending";
+    outcomeCounts[key] += 1;
+  }
+  const outcomeTotal = recentCalls?.length ?? 0;
+  const finalizedOutcomeTotal = Math.max(0, outcomeTotal - outcomeCounts.pending);
+  const winRate = finalizedOutcomeTotal > 0
+    ? Math.round((outcomeCounts.sale / finalizedOutcomeTotal) * 100)
+    : null;
 
   const { data: allScores } = await admin
     .from("call_analyses")
@@ -111,6 +141,15 @@ export async function GET(request: Request) {
     recentAvgScore,
     totalCalls: totalCalls ?? 0,
     objectionHandleRate,
+    outcomes: {
+      total: outcomeTotal,
+      winRate,
+      counts: OUTCOME_DEFS.map((outcome) => ({
+        ...outcome,
+        count: outcomeCounts[outcome.value] ?? 0,
+        rate: outcomeTotal > 0 ? Math.round(((outcomeCounts[outcome.value] ?? 0) / outcomeTotal) * 100) : 0,
+      })),
+    },
     improvementAreas,
     badges,
   });

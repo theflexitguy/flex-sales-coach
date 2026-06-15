@@ -9,6 +9,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRecordingStore } from "../../stores/recording-store";
@@ -28,6 +29,7 @@ export default function RecordScreen() {
 
 function RecordingView({ isManager }: { isManager: boolean }) {
   const [showDashboard, setShowDashboard] = useState(isManager);
+  const [doorToDoorMode, setDoorToDoorMode] = useState(true);
   const {
     isRecording,
     elapsedMs,
@@ -78,7 +80,7 @@ function RecordingView({ isManager }: { isManager: boolean }) {
   }
 
   async function handleStart() {
-    await startDay();
+    await startDay({ doorToDoorMode });
   }
 
   async function handleStop() {
@@ -139,6 +141,26 @@ function RecordingView({ isManager }: { isManager: boolean }) {
         <View style={styles.idleContainer}>
           <RepStatsView />
           <View style={styles.startButtonContainer}>
+            <View style={styles.modeCard}>
+              <View style={styles.modeIcon}>
+                <Ionicons name="walk" size={18} color={doorToDoorMode ? "#35b2ff" : "#71717a"} />
+              </View>
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeTitle}>Door-to-door mode</Text>
+                <Text style={styles.modeSubtitle}>
+                  {doorToDoorMode ? "Uses location to separate visits" : "Records without visit splitting"}
+                </Text>
+              </View>
+              <Switch
+                value={doorToDoorMode}
+                onValueChange={(value) => {
+                  setDoorToDoorMode(value);
+                  haptic.selection();
+                }}
+                trackColor={{ false: "#27272a", true: "rgba(53,178,255,0.35)" }}
+                thumbColor={doorToDoorMode ? "#35b2ff" : "#71717a"}
+              />
+            </View>
             <TouchableOpacity style={styles.startButton} onPress={handleStart}>
               <Ionicons name="play" size={24} color="#fff" />
               <Text style={styles.startButtonText}>Start Day</Text>
@@ -331,7 +353,30 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 24,
     alignItems: "center",
+    gap: 14,
   },
+  modeCard: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#18181b",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    padding: 14,
+  },
+  modeIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#09090b",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modeTextWrap: { flex: 1 },
+  modeTitle: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  modeSubtitle: { color: "#71717a", fontSize: 12, marginTop: 2 },
   iconCircle: {
     width: 96,
     height: 96,

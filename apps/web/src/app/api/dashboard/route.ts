@@ -2,6 +2,16 @@ import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
 import { getVisibleRepIds } from "@/lib/assignments";
 
+const OUTCOME_DEFS = [
+  { value: "sale", label: "Won", color: "#22c55e" },
+  { value: "no_sale", label: "Lost", color: "#ef4444" },
+  { value: "callback", label: "Callback", color: "#35b2ff" },
+  { value: "not_home", label: "Not Home", color: "#71717a" },
+  { value: "not_interested", label: "Not Interested", color: "#f97316" },
+  { value: "already_has_service", label: "Has Service", color: "#8b5cf6" },
+  { value: "pending", label: "Pending", color: "#3f3f46" },
+];
+
 export async function GET(request: Request) {
   const auth = await requireApiAuth(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -19,17 +29,17 @@ export async function GET(request: Request) {
     { data: dailyStats },
     { data: allAnalyses },
     { data: allObjections },
-    { data: recentNotes },
     { data: reps },
+    { data: recentCalls },
   ] = await Promise.all([
     supabase.from("calls").select("id, rep_id, customer_name, status, recorded_at, duration_seconds").gte("recorded_at", today).order("recorded_at", { ascending: false }),
     supabase.from("recording_sessions").select("*").in("status", ["recording", "uploading", "processing"]),
     supabase.from("help_requests").select("*", { count: "exact" }).eq("status", "pending").order("created_at", { ascending: false }).limit(5),
     supabase.from("rep_daily_stats").select("*").gte("stat_date", thirtyDaysAgo).order("stat_date"),
-    supabase.from("call_analyses").select("overall_score, overall_grade, call_id, created_at").gte("created_at", `${thirtyDaysAgo}T00:00:00`),
+    supabase.from("call_analyses").select("overall_score, overall_grade, call_id, created_at, calls!inner(rep_id)").gte("created_at", `${thirtyDaysAgo}T00:00:00`),
     supabase.from("objections").select("category, handling_grade, rep_id").gte("created_at", `${thirtyDaysAgo}T00:00:00`),
-    supabase.from("coaching_notes").select("call_id, author_id, created_at").gte("created_at", `${thirtyDaysAgo}T00:00:00`),
     supabase.from("profiles").select("id, full_name, role").eq("is_active", true),
+    supabase.from("calls").select("id, rep_id, outcome, status, recorded_at").gte("recorded_at", `${thirtyDaysAgo}T00:00:00`),
   ]);
 
   // Filter to visible reps if manager
@@ -67,9 +77,40 @@ export async function GET(request: Request) {
     }))
     .sort((a, b) => (b.avgScore ?? 0) - (a.avgScore ?? 0));
 
+  const visibleCall = (call: { rep_id: string }) => !visibleRepIds || visibleRepIds.includes(call.rep_id);
+  const visibleRecentCalls = (recentCalls ?? []).filter((call: { rep_id: string; status?: string }) =>
+    visibleCall(call) && call.status === "completed"
+  );
+  const outcomeCounts: Record<string, number> = Object.fromEntries(
+    OUTCOME_DEFS.map((outcome) => [outcome.value, 0])
+  );
+  for (const call of visibleRecentCalls as Array<{ outcome: string | null }>) {
+    const key = call.outcome && outcomeCounts[call.outcome] != null ? call.outcome : "pending";
+    outcomeCounts[key] += 1;
+  }
+  const outcomeTotal = visibleRecentCalls.length;
+  const finalizedOutcomeTotal = Math.max(0, outcomeTotal - outcomeCounts.pending);
+  const winRate = finalizedOutcomeTotal > 0
+    ? Math.round((outcomeCounts.sale / finalizedOutcomeTotal) * 100)
+    : null;
+  const outcomes = {
+    total: outcomeTotal,
+    winRate,
+    counts: OUTCOME_DEFS.map((outcome) => ({
+      ...outcome,
+      count: outcomeCounts[outcome.value] ?? 0,
+      rate: outcomeTotal > 0 ? Math.round(((outcomeCounts[outcome.value] ?? 0) / outcomeTotal) * 100) : 0,
+    })),
+  };
+
+  const visibleAnalyses = (allAnalyses ?? []).filter((analysis: Record<string, unknown>) => {
+    const call = analysis.calls as { rep_id?: string } | null;
+    return !visibleRepIds || (call?.rep_id != null && visibleRepIds.includes(call.rep_id));
+  });
+
   // Trends: daily scores
   const dailyTrends: Record<string, { scores: number[]; count: number }> = {};
-  for (const a of allAnalyses ?? []) {
+  for (const a of visibleAnalyses) {
     const date = (a.created_at as string).split("T")[0];
     if (!dailyTrends[date]) dailyTrends[date] = { scores: [], count: 0 };
     dailyTrends[date].scores.push(a.overall_score);
@@ -85,7 +126,7 @@ export async function GET(request: Request) {
     .sort((a, b) => a.date.localeCompare(b.date));
 
   // Worst call today
-  const todayScores = (allAnalyses ?? [])
+  const todayScores = visibleAnalyses
     .filter((a) => (a.created_at as string).startsWith(today))
     .sort((a, b) => a.overall_score - b.overall_score);
   const worstCallToday = todayScores[0]?.call_id ?? null;
@@ -102,11 +143,12 @@ export async function GET(request: Request) {
   return NextResponse.json({
     todayActivity: {
       callsToday: (todayCalls ?? []).filter((c: { rep_id: string }) => !visibleRepIds || visibleRepIds.includes(c.rep_id)).length,
-      activeSessions: (activeSessions ?? []).length,
+      activeSessions: (activeSessions ?? []).filter((s: { rep_id: string }) => !visibleRepIds || visibleRepIds.includes(s.rep_id)).length,
       analyzedToday: todayScores.length,
     },
     leaderboard,
     trends,
+    outcomes,
     helpRequests: {
       pendingCount: pendingHelpCount ?? 0,
       recent: (pendingHelp ?? []).map((r: Record<string, unknown>) => ({

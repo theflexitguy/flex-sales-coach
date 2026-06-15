@@ -27,7 +27,7 @@ interface RecordingState {
   health: RecordingHealth;
   error: string | null;
 
-  startDay: () => Promise<void>;
+  startDay: (options?: { doorToDoorMode?: boolean }) => Promise<void>;
   stopAndName: (label: string) => Promise<void>;
   updateElapsed: () => void;
   updateMetering: () => Promise<void>;
@@ -46,16 +46,17 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
   health: "stopped",
   error: null,
 
-  startDay: async () => {
+  startDay: async (options = {}) => {
     // Guard: prevent double-start
     if (get().isRecording) return;
 
     try {
       set({ error: null });
 
-      // Request location permission and capture GPS
-      await requestLocationPermission();
-      const coords = await getCurrentLocation();
+      const doorToDoorMode = options.doorToDoorMode ?? true;
+      const coords = doorToDoorMode
+        ? await requestLocationPermission().then(() => getCurrentLocation())
+        : null;
 
       // Create session on server (server also guards against duplicates)
       const { sessionId, nextChunkIndex } = await apiPost<{
@@ -67,6 +68,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
           startedAt: new Date().toISOString(),
           latitude: coords?.latitude ?? null,
           longitude: coords?.longitude ?? null,
+          doorToDoorMode,
         }
       );
 
@@ -97,7 +99,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       });
 
       // Start recording
-      await chunkManager.startSession(sessionId, nextChunkIndex ?? 0);
+      await chunkManager.startSession(sessionId, nextChunkIndex ?? 0, { doorToDoorMode });
 
       set({
         isRecording: true,

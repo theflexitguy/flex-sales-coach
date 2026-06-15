@@ -3,6 +3,7 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { apiGet } from "../../services/api";
 
 const GRADE_COLORS: Record<string, string> = {
@@ -17,10 +18,12 @@ interface HistoryItem {
   durationSeconds: number;
   score: number | null;
   grade: string | null;
+  summary: string | null;
   startedAt: string;
 }
 
 export function RoleplayHistory() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,7 +57,11 @@ export function RoleplayHistory() {
       keyExtractor={(item) => item.id}
       contentContainerStyle={{ padding: 16, gap: 8 }}
       renderItem={({ item }) => (
-        <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => router.push(`/roleplay/session/${item.id}`)}
+          activeOpacity={0.82}
+        >
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={styles.title} numberOfLines={1}>{item.scenarioTitle}</Text>
@@ -69,13 +76,17 @@ export function RoleplayHistory() {
                 </Text>
               </View>
             )}
+            <Ionicons name="chevron-forward" size={18} color="#52525b" />
           </View>
+          {item.summary && (
+            <Text style={styles.summary} numberOfLines={2}>{item.summary}</Text>
+          )}
           <Text style={styles.date}>
             {new Date(item.startedAt).toLocaleDateString("en-US", {
               month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
             })}
           </Text>
-        </View>
+        </TouchableOpacity>
       )}
     />
   );
@@ -97,5 +108,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#09090b", justifyContent: "center", alignItems: "center",
   },
   score: { fontSize: 16, fontWeight: "700" },
+  summary: { color: "#a1a1aa", fontSize: 12, lineHeight: 17 },
   date: { color: "#3f3f46", fontSize: 11 },
 });

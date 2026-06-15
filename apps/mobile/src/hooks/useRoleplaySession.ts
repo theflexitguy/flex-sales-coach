@@ -17,10 +17,23 @@ interface TranscriptLine {
   readonly endMs: number;
 }
 
+export interface RoleplayAnalysisResult {
+  readonly overallScore: number;
+  readonly overallGrade: string;
+  readonly summary: string;
+  readonly strengths: string[];
+  readonly improvements: string[];
+  readonly objectionHandlingScores: Array<{ category: string; grade: string; feedback: string }>;
+  readonly comparedToReal: { avgRealScore: number; delta: number } | null;
+}
+
 interface SessionResult {
   readonly sessionId: string;
   readonly durationSeconds: number;
   readonly hasTranscript: boolean;
+  readonly analysis?: RoleplayAnalysisResult | null;
+  readonly analysisStatus?: "complete" | "processing" | "failed" | "unavailable";
+  readonly analysisError?: string | null;
 }
 
 export function useRoleplaySession() {
@@ -32,6 +45,7 @@ export function useRoleplaySession() {
   const [duration, setDuration] = useState(0);
   const [result, setResult] = useState<SessionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [speakerEnabled, setSpeakerEnabledState] = useState(true);
 
   const streamRef = useRef<OpenAIRealtimeService | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -40,6 +54,7 @@ export function useRoleplaySession() {
   const sessionIdRef = useRef<string | null>(null);
   const transcriptRef = useRef<readonly TranscriptLine[]>([]);
   const durationRef = useRef(0);
+  const speakerEnabledRef = useRef(true);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -56,6 +71,10 @@ export function useRoleplaySession() {
   useEffect(() => {
     durationRef.current = duration;
   }, [duration]);
+
+  useEffect(() => {
+    speakerEnabledRef.current = speakerEnabled;
+  }, [speakerEnabled]);
 
   const disconnectStream = useCallback(async () => {
     const stream = streamRef.current;
@@ -133,6 +152,7 @@ export function useRoleplaySession() {
       await stream.connect({
         clientSecret: data.clientSecret,
         model: data.model,
+        speakerEnabled: speakerEnabledRef.current,
       });
     } catch (err: unknown) {
       await disconnectStream();
@@ -165,6 +185,12 @@ export function useRoleplaySession() {
     }
   }, [disconnectStream]);
 
+  const setSpeakerEnabled = useCallback((enabled: boolean) => {
+    speakerEnabledRef.current = enabled;
+    setSpeakerEnabledState(enabled);
+    void streamRef.current?.setSpeakerEnabled(enabled).catch(() => {});
+  }, []);
+
   const reset = useCallback(() => {
     void disconnectStream();
     setPhase("idle");
@@ -175,7 +201,9 @@ export function useRoleplaySession() {
     setDuration(0);
     setResult(null);
     setErrorMessage(null);
-  }, [disconnectStream]);
+    speakerEnabledRef.current = true;
+    setSpeakerEnabled(true);
+  }, [disconnectStream, setSpeakerEnabled]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -205,8 +233,10 @@ export function useRoleplaySession() {
     duration,
     result,
     errorMessage,
+    speakerEnabled,
     startSession,
     endSession,
+    setSpeakerEnabled,
     reset,
   };
 }

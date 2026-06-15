@@ -14,9 +14,47 @@ interface StatsData {
   recentAvgScore: number | null;
   totalCalls: number;
   objectionHandleRate: number | null;
+  outcomes?: {
+    total: number;
+    winRate: number | null;
+    counts: Array<{ value: string; label: string; color: string; count: number; rate: number }>;
+  };
   improvementAreas: Array<{ category: string; failRate: number; total: number }>;
   badges: Array<{ id: string; label: string; icon: string; earned: boolean }>;
   recentStats: Array<{ date: string; callsCount: number; avgScore: number | null }>;
+}
+
+function OutcomeBreakdown({ outcomes }: { outcomes: NonNullable<StatsData["outcomes"]> }) {
+  const primary = outcomes.counts.filter((item) =>
+    ["sale", "no_sale", "callback", "pending"].includes(item.value)
+  );
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.outcomeHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Conversation Outcomes</Text>
+          <Text style={styles.sectionSubtitle}>Last 30 days</Text>
+        </View>
+        <View style={styles.winRateBadge}>
+          <Text style={styles.winRateLabel}>Win</Text>
+          <Text style={styles.winRateValue}>{outcomes.winRate ?? "--"}%</Text>
+        </View>
+      </View>
+      <View style={styles.outcomeGrid}>
+        {primary.map((item) => (
+          <View key={item.value} style={styles.outcomeCard}>
+            <View style={styles.outcomeTopLine}>
+              <Text style={styles.outcomeLabel}>{item.label}</Text>
+              <View style={[styles.outcomeDot, { backgroundColor: item.color }]} />
+            </View>
+            <Text style={styles.outcomeCount}>{item.count}</Text>
+            <Text style={styles.outcomeRate}>{item.rate}%</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 export function RepStatsView() {
@@ -89,6 +127,8 @@ export function RepStatsView() {
           </Text>
         </View>
       </View>
+
+      {stats.outcomes && <OutcomeBreakdown outcomes={stats.outcomes} />}
 
       {/* Badges */}
       {stats.badges.some((b) => b.earned) && (
@@ -183,6 +223,24 @@ const styles = StyleSheet.create({
   section: { paddingHorizontal: 16, marginTop: 20 },
   sectionTitle: { color: "#fff", fontSize: 17, fontWeight: "600", marginBottom: 8 },
   sectionSubtitle: { color: "#71717a", fontSize: 13, marginBottom: 12 },
+  outcomeHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
+  winRateBadge: {
+    backgroundColor: "rgba(34,197,94,0.08)", borderRadius: 10,
+    borderWidth: 1, borderColor: "rgba(34,197,94,0.18)",
+    paddingHorizontal: 12, paddingVertical: 8, alignItems: "center",
+  },
+  winRateLabel: { color: "#71717a", fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+  winRateValue: { color: "#22c55e", fontSize: 16, fontWeight: "800" },
+  outcomeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  outcomeCard: {
+    flex: 1, minWidth: "47%", backgroundColor: "#18181b",
+    borderRadius: 10, borderWidth: 1, borderColor: "#27272a", padding: 12,
+  },
+  outcomeTopLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  outcomeLabel: { color: "#a1a1aa", fontSize: 12, fontWeight: "600" },
+  outcomeDot: { width: 7, height: 7, borderRadius: 4 },
+  outcomeCount: { color: "#fff", fontSize: 24, fontWeight: "800", marginTop: 6 },
+  outcomeRate: { color: "#52525b", fontSize: 11, marginTop: 1 },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   badge: {
     flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(53,178,255,0.1)",

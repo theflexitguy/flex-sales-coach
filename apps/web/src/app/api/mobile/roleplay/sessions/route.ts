@@ -5,6 +5,51 @@ import { analyzeRoleplaySession } from "@/lib/roleplay-analysis";
 
 export const maxDuration = 300;
 
+type AnalysisRow = Record<string, unknown>;
+type TranscriptUtterance = {
+  speaker?: unknown;
+  role?: unknown;
+  text?: unknown;
+  startMs?: unknown;
+  endMs?: unknown;
+};
+
+function mapAnalysis(row: AnalysisRow | null) {
+  if (!row) return null;
+
+  return {
+    overallScore: row.overall_score,
+    overallGrade: row.overall_grade,
+    summary: row.summary,
+    strengths: Array.isArray(row.strengths) ? row.strengths : [],
+    improvements: Array.isArray(row.improvements) ? row.improvements : [],
+    objectionHandlingScores: Array.isArray(row.objection_handling_scores)
+      ? row.objection_handling_scores
+      : [],
+    comparedToReal: row.compared_to_real ?? null,
+  };
+}
+
+function mapTranscript(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((line: TranscriptUtterance) => {
+      const speaker = line.speaker ?? line.role;
+      const role = speaker === "customer" ? "customer" : speaker === "rep" ? "rep" : null;
+      const text = typeof line.text === "string" ? line.text.trim() : "";
+      if (!role || !text) return null;
+
+      return {
+        role,
+        text,
+        startMs: typeof line.startMs === "number" ? line.startMs : 0,
+        endMs: typeof line.endMs === "number" ? line.endMs : 0,
+      };
+    })
+    .filter(Boolean);
+}
+
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,7 +63,7 @@ export async function GET(request: Request) {
     const recoverAnalysis = url.searchParams.get("recoverAnalysis") === "1";
     const { data: session } = await admin
       .from("roleplay_sessions")
-      .select("id, status, duration_seconds, transcript_text, started_at, ended_at, roleplay_analyses(*)")
+      .select("id, status, duration_seconds, transcript_text, transcript_utterances, audio_storage_path, started_at, ended_at, roleplay_analyses(*), roleplay_personas(name), roleplay_scenarios(title, difficulty, target_objections)")
       .eq("id", sessionId)
       .eq("rep_id", auth.user.id)
       .single();
@@ -44,23 +89,34 @@ export async function GET(request: Request) {
       });
     }
 
+    let audioUrl: string | null = null;
+    if (session.audio_storage_path) {
+      const { data: signedAudio } = await admin.storage
+        .from("call-recordings")
+        .createSignedUrl(session.audio_storage_path, 3600);
+      audioUrl = signedAudio?.signedUrl ?? null;
+    }
+
+    const persona = session.roleplay_personas as unknown as Record<string, unknown> | null;
+    const scenario = session.roleplay_scenarios as unknown as Record<string, unknown> | null;
+
     return NextResponse.json({
       session: {
         id: session.id,
         status: session.status,
         durationSeconds: session.duration_seconds,
+        scenarioTitle: (scenario?.title as string) ?? "Free Practice",
+        scenarioDifficulty: (scenario?.difficulty as string) ?? null,
+        targetObjections: Array.isArray(scenario?.target_objections)
+          ? scenario.target_objections
+          : [],
+        personaName: (persona?.name as string) ?? "Customer",
         startedAt: session.started_at,
         endedAt: session.ended_at,
+        audioUrl,
+        transcript: mapTranscript(session.transcript_utterances),
       },
-      analysis: analysisRow ? {
-        overallScore: analysisRow.overall_score,
-        overallGrade: analysisRow.overall_grade,
-        summary: analysisRow.summary,
-        strengths: analysisRow.strengths,
-        improvements: analysisRow.improvements,
-        objectionHandlingScores: analysisRow.objection_handling_scores,
-        comparedToReal: analysisRow.compared_to_real,
-      } : null,
+      analysis: mapAnalysis(analysisRow),
       analysisStatus: analysisRow ? "complete" : shouldTriggerAnalysis ? "processing" : "unavailable",
     });
   }
@@ -68,7 +124,7 @@ export async function GET(request: Request) {
   // List recent sessions
   const { data: sessions } = await admin
     .from("roleplay_sessions")
-    .select("id, scenario_id, persona_id, status, duration_seconds, started_at, ended_at, roleplay_analyses(overall_score, overall_grade), roleplay_personas(name), roleplay_scenarios(title)")
+    .select("id, scenario_id, persona_id, status, duration_seconds, started_at, ended_at, roleplay_analyses(overall_score, overall_grade, summary), roleplay_personas(name), roleplay_scenarios(title)")
     .eq("rep_id", auth.user.id)
     .eq("status", "completed")
     .order("created_at", { ascending: false })
@@ -86,6 +142,7 @@ export async function GET(request: Request) {
       durationSeconds: s.duration_seconds,
       score: analysis?.overall_score ?? null,
       grade: analysis?.overall_grade ?? null,
+      summary: analysis?.summary ?? null,
       startedAt: s.started_at,
     };
   });

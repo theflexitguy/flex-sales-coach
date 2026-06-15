@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { GRADE_COLORS } from "@flex/shared";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
 
 interface DashboardData {
   todayActivity: { callsToday: number; activeSessions: number; analyzedToday: number };
@@ -12,6 +12,11 @@ interface DashboardData {
     objectionHandleRate: number | null; totalCalls: number;
   }>;
   trends: Array<{ date: string; avgScore: number; callCount: number }>;
+  outcomes: {
+    total: number;
+    winRate: number | null;
+    counts: Array<{ value: string; label: string; color: string; count: number; rate: number }>;
+  };
   helpRequests: { pendingCount: number; recent: Array<{ id: string; repName: string; excerpt: string; createdAt: string }> };
   quickActions: { worstCallToday: string | null; topFailedObjection: string | null; strugglingRep: string | null; strugglingRepName: string | null };
 }
@@ -61,6 +66,8 @@ export function ManagerDashboard({ userName }: { userName: string }) {
           href="/help-requests"
         />
       </div>
+
+      <OutcomeSummary outcomes={data.outcomes} />
 
       {/* Quick Actions */}
       {(data.quickActions.worstCallToday || data.quickActions.topFailedObjection || data.quickActions.strugglingRep) && (
@@ -229,6 +236,56 @@ export function ManagerDashboard({ userName }: { userName: string }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function OutcomeSummary({
+  outcomes,
+}: {
+  outcomes: DashboardData["outcomes"];
+}) {
+  const primary = outcomes.counts.filter((item) =>
+    ["sale", "no_sale", "callback", "pending"].includes(item.value)
+  );
+  const secondary = outcomes.counts.filter((item) =>
+    !["sale", "no_sale", "callback", "pending"].includes(item.value)
+  );
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-white">Conversation Outcomes</h2>
+          <p className="text-xs text-zinc-500 mt-1">Last 30 days</p>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-right">
+          <p className="text-xs text-zinc-500">Win Rate</p>
+          <p className="text-lg font-bold text-emerald-400">{outcomes.winRate ?? "--"}%</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {primary.map((item) => (
+          <div key={item.value} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-zinc-400">{item.label}</span>
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+            </div>
+            <p className="text-2xl font-bold text-white mt-1">{item.count}</p>
+            <p className="text-xs text-zinc-600">{item.rate}% of convos</p>
+          </div>
+        ))}
+      </div>
+      {secondary.some((item) => item.count > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {secondary.map((item) => (
+            <div key={item.value} className="flex items-center justify-between rounded-lg bg-zinc-950/40 px-3 py-2">
+              <span className="text-xs text-zinc-400">{item.label}</span>
+              <span className="text-sm font-semibold" style={{ color: item.color }}>{item.count}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

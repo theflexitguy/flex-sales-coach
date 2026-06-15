@@ -47,6 +47,10 @@ const flexMonitorEmitter =
  */
 export type RecordingHealth = "recording" | "paused" | "stopped";
 
+interface StartSessionOptions {
+  readonly doorToDoorMode?: boolean;
+}
+
 /**
  * Watchdog interval — checks if recording was paused (e.g. by a phone call,
  * Siri, or audio-session takeover) and auto-resumes by rotating to a new
@@ -101,6 +105,7 @@ export class ChunkManager {
   private consecutiveMissedChecks = 0;
   private health: RecordingHealth = "stopped";
   private usingNativeRecorder = false;
+  private doorToDoorMode = true;
 
   setOnChunkComplete(callback: (index: number) => void) {
     this.onChunkComplete = callback;
@@ -147,9 +152,14 @@ export class ChunkManager {
     }
   }
 
-  async startSession(sessionId: string, startChunkIndex = 0): Promise<void> {
+  async startSession(
+    sessionId: string,
+    startChunkIndex = 0,
+    options: StartSessionOptions = {}
+  ): Promise<void> {
     this.sessionId = sessionId;
     this.chunkIndex = Math.max(0, startChunkIndex);
+    this.doorToDoorMode = options.doorToDoorMode ?? true;
     this.consecutiveMissedChecks = 0;
     this.setHealth("recording");
 
@@ -159,7 +169,7 @@ export class ChunkManager {
       // enqueues uploads. Skip the watchdog + JS rotation entirely —
       // they're obsolete when native runs the show.
       await this.startNativeSession(sessionId, this.chunkIndex);
-      locationTracker.start(sessionId);
+      if (this.doorToDoorMode) locationTracker.start(sessionId);
       this.sendHeartbeat(sessionId);
       this.heartbeat = setInterval(() => {
         if (this.sessionId) this.sendHeartbeat(this.sessionId);
@@ -169,7 +179,7 @@ export class ChunkManager {
 
     await recordingEngine.startRecording();
     this.lastRecordingStartAt = Date.now();
-    locationTracker.start(sessionId);
+    if (this.doorToDoorMode) locationTracker.start(sessionId);
 
     // First heartbeat immediately so the server knows we're alive, then
     // on interval while the session is active.
@@ -370,7 +380,7 @@ export class ChunkManager {
 
     if (!uri) return;
 
-    const coords = await getCurrentLocation();
+    const coords = await this.getCurrentLocationForMode();
     uploadQueue.enqueue({
       sessionId: this.sessionId,
       chunkIndex: completedIndex,
@@ -438,7 +448,7 @@ export class ChunkManager {
       try {
         const { uri, durationMs } = await recordingEngine.stopRecording();
         if (this.sessionId && uri) {
-          const coords = await getCurrentLocation();
+          const coords = await this.getCurrentLocationForMode();
           uploadQueue.enqueue({
             sessionId: this.sessionId,
             chunkIndex: this.chunkIndex,
@@ -476,7 +486,7 @@ export class ChunkManager {
         // `evt.sessionId` for terminal events; drop only stale mid-session
         // events from a previous recording.
         if (!evt.final && this.sessionId !== evt.sessionId) return;
-        const coords = await getCurrentLocation();
+        const coords = await this.getCurrentLocationForMode();
         uploadQueue.enqueue({
           sessionId: evt.sessionId,
           chunkIndex: evt.chunkIndex,
@@ -546,7 +556,7 @@ export class ChunkManager {
     const events = await nativeChunkRecorder.drainFinalizedChunks();
     for (const evt of events) {
       if (!evt.sessionId || evt.chunkIndex == null || !evt.filePath) continue;
-      const coords = await getCurrentLocation();
+      const coords = await this.getCurrentLocationForMode();
       uploadQueue.enqueue({
         sessionId: evt.sessionId,
         chunkIndex: evt.chunkIndex,
@@ -566,6 +576,11 @@ export class ChunkManager {
 
   getChunkIndex(): number {
     return this.chunkIndex;
+  }
+
+  private async getCurrentLocationForMode(): Promise<{ latitude: number; longitude: number } | null> {
+    if (!this.doorToDoorMode) return null;
+    return getCurrentLocation();
   }
 }
 
