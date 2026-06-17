@@ -3,6 +3,7 @@ import { requireApiAuth } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
 import { streamText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { CLAUDE_HAIKU_MODEL } from "@/lib/anthropic-models";
 
 export async function GET(
   request: Request,
@@ -88,7 +89,7 @@ Answer the user's question about this call. Be specific, reference actual things
 
   // Haiku for conversational coaching chat — fast and cheap
   const result = streamText({
-    model: anthropic("claude-haiku-4-5-20251001"),
+    model: anthropic(CLAUDE_HAIKU_MODEL),
     system: systemPrompt,
     messages: chatMessages,
     maxOutputTokens: 1024,

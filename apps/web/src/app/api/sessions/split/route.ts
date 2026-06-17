@@ -3,6 +3,7 @@ import { createAdmin } from "@flex/supabase/admin";
 import { isInternalCall, getInternalSecret } from "@/lib/api-auth-server";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { CALL_NAMING_MODEL } from "@/lib/anthropic-models";
 import { execSync } from "child_process";
 import { writeFileSync, readFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
@@ -797,7 +798,7 @@ export async function POST(request: Request) {
         if (!isLast && fullText.trim().length > 0) {
           try {
             const { text: aiName } = await generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
+              model: anthropic(CALL_NAMING_MODEL),
               prompt: `Based on this door-to-door sales conversation transcript, generate a short name (max 40 chars). Use the customer's name if mentioned, otherwise a brief description like "Price Objection - Interested" or "Not Home - Left Info". Return ONLY the name, nothing else.\n\n${fullText.slice(0, 2000)}`,
               maxOutputTokens: 50,
             });

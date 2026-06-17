@@ -4,6 +4,7 @@ import { isInternalCall } from "@/lib/api-auth-server";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { roleTrackLabel } from "@/lib/role-tracks";
+import { CALL_ANALYSIS_MODEL } from "@/lib/anthropic-models";
 
 const PROMPT_VERSION = "1.1.0";
 
@@ -147,7 +148,7 @@ export async function POST(request: Request) {
       : { data: null };
 
     // Call Claude via AI SDK
-    const modelId = "claude-sonnet-4-20250514";
+    const modelId = CALL_ANALYSIS_MODEL;
 
     const { text: responseText } = await generateText({
       model: anthropic(modelId),

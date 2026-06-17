@@ -1,0 +1,23 @@
+export const CLAUDE_SONNET_MODEL =
+  process.env.ANTHROPIC_SONNET_MODEL ?? "claude-sonnet-4-6";
+
+export const CLAUDE_HAIKU_MODEL =
+  process.env.ANTHROPIC_HAIKU_MODEL ?? "claude-haiku-4-5-20251001";
+
+export const CALL_ANALYSIS_MODEL =
+  process.env.CALL_ANALYSIS_MODEL ??
+  process.env.ANTHROPIC_ANALYSIS_MODEL ??
+  CLAUDE_SONNET_MODEL;
+
+export const ROLEPLAY_ANALYSIS_MODEL =
+  process.env.ROLEPLAY_ANALYSIS_MODEL ??
+  process.env.ANTHROPIC_ANALYSIS_MODEL ??
+  CLAUDE_SONNET_MODEL;
+
+export const ROLEPLAY_GENERATION_MODEL =
+  process.env.ROLEPLAY_GENERATION_MODEL ??
+  process.env.ANTHROPIC_GENERATION_MODEL ??
+  CLAUDE_SONNET_MODEL;
+
+export const CALL_NAMING_MODEL =
+  process.env.CALL_NAMING_MODEL ?? CLAUDE_HAIKU_MODEL;

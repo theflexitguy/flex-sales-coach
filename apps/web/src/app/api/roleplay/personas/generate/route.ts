@@ -4,6 +4,7 @@ import { createAdmin } from "@flex/supabase/admin";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { ELEVENLABS_VOICES } from "@flex/shared";
+import { ROLEPLAY_GENERATION_MODEL } from "@/lib/anthropic-models";
 
 const PERSONA_GENERATION_PROMPT = `You are an AI that analyzes real door-to-door pest control sales call transcripts and extracts distinct customer persona archetypes for training purposes.
 
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
   ].join("\n");
 
   const { text: responseText } = await generateText({
-    model: anthropic("claude-sonnet-4-20250514"),
+    model: anthropic(ROLEPLAY_GENERATION_MODEL),
     system: PERSONA_GENERATION_PROMPT,
     prompt: inputText,
     maxOutputTokens: 4096,

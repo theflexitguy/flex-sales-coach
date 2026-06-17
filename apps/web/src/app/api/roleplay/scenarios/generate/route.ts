@@ -3,6 +3,7 @@ import { requireApiAuth } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { ROLEPLAY_GENERATION_MODEL } from "@/lib/anthropic-models";
 
 const SCENARIO_GENERATION_PROMPT = `You are an AI that creates training scenarios for door-to-door pest control sales reps.
 
@@ -102,7 +103,7 @@ export async function POST(request: Request) {
   ].join("\n");
 
   const { text: responseText } = await generateText({
-    model: anthropic("claude-sonnet-4-20250514"),
+    model: anthropic(ROLEPLAY_GENERATION_MODEL),
     system: SCENARIO_GENERATION_PROMPT,
     prompt: inputText,
     maxOutputTokens: 4096,

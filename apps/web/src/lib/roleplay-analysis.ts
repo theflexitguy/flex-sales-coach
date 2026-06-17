@@ -1,9 +1,10 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { createAdmin } from "@flex/supabase/admin";
+import { ROLEPLAY_ANALYSIS_MODEL } from "@/lib/anthropic-models";
 
 const PROMPT_VERSION = "1.0.1";
-const MODEL_ID = process.env.ROLEPLAY_ANALYSIS_MODEL ?? "claude-sonnet-4-20250514";
+const MODEL_ID = ROLEPLAY_ANALYSIS_MODEL;
 
 type Grade = "excellent" | "good" | "acceptable" | "needs_improvement" | "poor";
 
