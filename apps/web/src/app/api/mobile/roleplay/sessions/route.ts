@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { analyzeRoleplaySession } from "@/lib/roleplay-analysis";
+import { getRoleplayAccess } from "@/lib/roleplay-access";
 
 export const maxDuration = 300;
 
@@ -56,6 +57,8 @@ export async function GET(request: Request) {
 
   const admin = createAdmin();
   const url = new URL(request.url);
+  const { hasAccess } = await getRoleplayAccess(admin, auth.user.id);
+  if (!hasAccess) return NextResponse.json({ sessions: [] });
 
   // Single session lookup (for polling analysis)
   const sessionId = url.searchParams.get("sessionId");

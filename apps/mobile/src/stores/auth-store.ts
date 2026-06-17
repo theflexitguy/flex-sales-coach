@@ -12,10 +12,17 @@ async function fetchProfile(userId: string) {
   if (!profile) return null;
 
   // Fetch manager assignments for this user
-  const { data: assignments } = await supabase
-    .from("manager_rep_assignments")
-    .select("manager_id")
-    .eq("rep_id", userId);
+  const [{ data: assignments }, { data: roleplayAccess }] = await Promise.all([
+    supabase
+      .from("manager_rep_assignments")
+      .select("manager_id")
+      .eq("rep_id", userId),
+    supabase
+      .from("roleplay_beta_access")
+      .select("enabled")
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
 
   return {
     id: profile.id,
@@ -23,6 +30,7 @@ async function fetchProfile(userId: string) {
     email: profile.email,
     role: profile.role,
     teamId: profile.team_id,
+    roleplayBetaEnabled: profile.role === "manager" || roleplayAccess?.enabled === true,
     managerIds: (assignments ?? []).map((a: { manager_id: string }) => a.manager_id),
   };
 }
@@ -36,6 +44,7 @@ interface AuthState {
     email: string;
     role: string;
     teamId: string | null;
+    roleplayBetaEnabled: boolean;
     managerIds: string[];
   } | null;
   loading: boolean;

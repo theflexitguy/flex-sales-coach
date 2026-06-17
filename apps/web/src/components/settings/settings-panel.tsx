@@ -25,6 +25,7 @@ interface AssignmentRep {
   fullName: string;
   email: string;
   playbookRole: string;
+  roleplayBetaEnabled: boolean;
   managerIds: string[];
 }
 
@@ -156,6 +157,25 @@ export function SettingsPanel({
     if (res.ok) {
       setReps((prev) =>
         prev.map((rep) => (rep.id === repId ? { ...rep, playbookRole } : rep))
+      );
+    }
+    setSavingAssignment(null);
+  }
+
+  async function updateRepRoleplayBeta(repId: string, enabled: boolean) {
+    setSavingAssignment(repId);
+    const res = await fetch("/api/team/assignments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: repId,
+        enabled,
+        action: "set-roleplay-beta",
+      }),
+    });
+    if (res.ok) {
+      setReps((prev) =>
+        prev.map((rep) => (rep.id === repId ? { ...rep, roleplayBetaEnabled: enabled } : rep))
       );
     }
     setSavingAssignment(null);
@@ -613,6 +633,17 @@ export function SettingsPanel({
                       ))}
                     </select>
                     <button
+                      onClick={() => updateRepRoleplayBeta(rep.id, !rep.roleplayBetaEnabled)}
+                      disabled={savingAssignment === rep.id}
+                      className={`text-xs px-3 py-1.5 rounded-full font-medium border disabled:opacity-50 transition-colors ${
+                        rep.roleplayBetaEnabled
+                          ? "border-violet-500/30 bg-violet-500/15 text-violet-300 hover:bg-violet-500/25"
+                          : "border-zinc-700 bg-zinc-800 text-zinc-400 hover:border-violet-500/30 hover:text-violet-300"
+                      }`}
+                    >
+                      {rep.roleplayBetaEnabled ? "Roleplay Beta On" : "Roleplay Beta"}
+                    </button>
+                    <button
                       onClick={() => promoteRepToManager(rep)}
                       disabled={savingAssignment === rep.id}
                       className="text-xs px-3 py-1.5 rounded-full font-medium border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
@@ -646,7 +677,8 @@ export function SettingsPanel({
             <p className="text-sm text-zinc-400">
               <span className="font-medium text-zinc-300">How it works:</span>{" "}
               Use Make Manager to promote a team member, pick each rep&apos;s playbook role,
-              then click manager names to assign visibility. Reps with no assignment are visible to everyone.
+              toggle Roleplay Beta for selected testers, then click manager names to assign visibility.
+              Reps with no assignment are visible to everyone.
             </p>
           </div>
         </div>

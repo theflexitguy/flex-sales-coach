@@ -6,6 +6,7 @@ export interface UserProfile {
   readonly fullName: string;
   readonly role: UserRole;
   readonly playbookRole?: string;
+  readonly roleplayBetaEnabled?: boolean;
   readonly teamId: string;
   readonly avatarUrl: string | null;
   readonly isActive: boolean;

@@ -10,14 +10,15 @@ type Tab = "roleplay" | "objections" | "history";
 export default function LearnScreen() {
   const profile = useAuthStore((s) => s.profile);
   const isManager = profile?.role === "manager";
+  const canUseRoleplay = isManager || profile?.roleplayBetaEnabled === true;
 
   const [activeTab, setActiveTab] = useState<Tab>("objections");
 
-  // Tabs available to all users vs manager-only (roleplay is beta)
+  // Tabs available to all users vs roleplay beta testers.
   const tabs: Array<{ key: Tab; label: string }> = [
-    ...(isManager ? [{ key: "roleplay" as const, label: "Practice" }] : []),
+    ...(canUseRoleplay ? [{ key: "roleplay" as const, label: "Practice" }] : []),
     { key: "objections", label: "Objections" },
-    ...(isManager ? [{ key: "history" as const, label: "History" }] : []),
+    ...(canUseRoleplay ? [{ key: "history" as const, label: "History" }] : []),
   ];
 
   return (
@@ -39,9 +40,9 @@ export default function LearnScreen() {
 
       {/* Tab content */}
       <View style={{ flex: 1 }}>
-        {activeTab === "roleplay" && isManager && <ScenarioBrowser />}
+        {activeTab === "roleplay" && canUseRoleplay && <ScenarioBrowser />}
         {activeTab === "objections" && <ObjectionLibrary />}
-        {activeTab === "history" && isManager && <RoleplayHistory />}
+        {activeTab === "history" && canUseRoleplay && <RoleplayHistory />}
       </View>
     </View>
   );

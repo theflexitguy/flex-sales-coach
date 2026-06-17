@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
+import { getRoleplayAccess } from "@/lib/roleplay-access";
 
 const DIFFICULTY_ORDER: Record<string, number> = {
   beginner: 0,
@@ -20,19 +21,13 @@ export async function GET(request: Request) {
 
   const admin = createAdmin();
 
-  // Get rep's team and role
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("team_id, role")
-    .eq("id", auth.user.id)
-    .single();
+  const { profile, hasAccess } = await getRoleplayAccess(admin, auth.user.id);
 
   if (!profile?.team_id) {
     return NextResponse.json({ error: "Not on a team" }, { status: 400 });
   }
 
-  // Roleplay is in beta — managers only
-  if (profile.role !== "manager") {
+  if (!hasAccess) {
     return NextResponse.json({ scenarios: [], weakCategories: [], sessionsToday: 0 });
   }
 

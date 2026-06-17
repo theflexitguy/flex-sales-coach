@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { DAILY_ROLEPLAY_SESSION_LIMIT } from "@flex/shared";
+import { getRoleplayAccess } from "@/lib/roleplay-access";
 
 type OpenAIVoice = "cedar" | "marin" | "echo" | "sage" | "coral" | "shimmer";
 
@@ -94,15 +95,13 @@ export async function POST(request: Request) {
 
   const admin = createAdmin();
 
-  // Get rep profile
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("team_id")
-    .eq("id", auth.user.id)
-    .single();
+  const { profile, hasAccess } = await getRoleplayAccess(admin, auth.user.id);
 
   if (!profile?.team_id) {
     return NextResponse.json({ error: "Not on a team" }, { status: 400 });
+  }
+  if (!hasAccess) {
+    return NextResponse.json({ error: "Roleplay beta is not enabled for this account" }, { status: 403 });
   }
 
   // Check daily limit

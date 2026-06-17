@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   const admin = createAdmin();
   const teamId = auth.profile.team_id;
 
-  const [{ data: profiles }, { data: assignments }] = await Promise.all([
+  const [{ data: profiles }, { data: assignments }, { data: roleplayAccess }] = await Promise.all([
     admin
       .from("profiles")
       .select("id, full_name, email, role, playbook_role")
@@ -24,6 +24,10 @@ export async function GET(request: Request) {
     admin
       .from("manager_rep_assignments")
       .select("manager_id, rep_id")
+      .eq("team_id", teamId),
+    admin
+      .from("roleplay_beta_access")
+      .select("user_id, enabled")
       .eq("team_id", teamId),
   ]);
 
@@ -36,6 +40,9 @@ export async function GET(request: Request) {
     if (!repAssignments[a.rep_id]) repAssignments[a.rep_id] = [];
     repAssignments[a.rep_id].push(a.manager_id);
   }
+  const roleplayAccessByUser = new Map(
+    (roleplayAccess ?? []).map((row) => [row.user_id, row.enabled === true])
+  );
 
   return NextResponse.json({
     managers: managers.map((m) => ({
@@ -49,6 +56,7 @@ export async function GET(request: Request) {
       fullName: r.full_name,
       email: r.email,
       playbookRole: r.playbook_role,
+      roleplayBetaEnabled: roleplayAccessByUser.get(r.id) ?? false,
       managerIds: repAssignments[r.id] ?? [],
     })),
   });
@@ -120,6 +128,40 @@ export async function PUT(request: Request) {
     }
 
     return NextResponse.json({ success: true, accountRole });
+  }
+
+  if (action === "set-roleplay-beta") {
+    const { userId, enabled } = body;
+    if (!userId || typeof enabled !== "boolean") {
+      return NextResponse.json({ error: "userId and enabled boolean required" }, { status: 400 });
+    }
+
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id, team_id, role")
+      .eq("id", userId)
+      .eq("team_id", teamId)
+      .single();
+
+    if (!profile) return NextResponse.json({ error: "User not found on this team" }, { status: 404 });
+    if (profile.role !== "rep") {
+      return NextResponse.json({ error: "Managers already have roleplay access" }, { status: 400 });
+    }
+
+    const { error } = await admin
+      .from("roleplay_beta_access")
+      .upsert(
+        {
+          user_id: userId,
+          team_id: teamId,
+          enabled,
+          enabled_by: auth.user.id,
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, roleplayBetaEnabled: enabled });
   }
 
   if (!repId || !managerId) {
