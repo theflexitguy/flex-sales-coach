@@ -105,7 +105,7 @@ export async function POST(request: Request) {
 
   await supabase
     .from("calls")
-    .update({ status: "analyzing" })
+    .update({ status: "analyzing", error_message: null })
     .eq("id", callId);
 
   try {
@@ -333,6 +333,7 @@ export async function POST(request: Request) {
       .from("calls")
       .update({
         status: "completed",
+        error_message: null,
         ...(predictedOutcome ? { outcome: predictedOutcome } : {}),
       })
       .eq("id", callId);
