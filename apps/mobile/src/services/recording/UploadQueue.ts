@@ -102,6 +102,19 @@ function withoutFileScheme(uri: string): string {
   return uri.replace(/^file:\/\//, "");
 }
 
+function spoolUriForJob(
+  job: Pick<ChunkUploadJob, "sessionId" | "chunkIndex">
+): string | null {
+  if (!FileSystem.documentDirectory) return null;
+  return `${LOCAL_SPOOL_DIR}/${job.sessionId}/${job.chunkIndex}.m4a`;
+}
+
+function looksLikeMissingFileError(message: string): boolean {
+  return /file[_\s-]*missing|file missing at|chunk file missing|no such file|does not exist/i.test(
+    message
+  );
+}
+
 async function getLocalSpoolStats(): Promise<LocalSpoolStats> {
   if (!FileSystem.documentDirectory) return { files: 0, bytes: 0 };
 
@@ -300,17 +313,25 @@ class UploadQueue {
       if (this.queue.length > 0) {
         const survivors: ChunkUploadJob[] = [];
         const dropped: ChunkUploadJob[] = [];
+        let changed = false;
         for (const job of this.queue) {
-          const info = await FileSystem.getInfoAsync(job.uri);
-          if (info.exists) {
+          const resolvedUri = await this.resolveChunkUri(job);
+          if (resolvedUri) {
+            if (resolvedUri !== job.uri) {
+              job.uri = resolvedUri;
+              changed = true;
+            }
             survivors.push(job);
           } else {
             dropped.push(job);
+            changed = true;
           }
         }
-        if (dropped.length > 0) {
+        if (changed) {
           this.queue = survivors;
           await this.persist();
+        }
+        if (dropped.length > 0) {
           for (const job of dropped) {
             const record: UploadErrorRecord = {
               at: Date.now(),
@@ -318,7 +339,7 @@ class UploadQueue {
               chunkIndex: job.chunkIndex,
               retries: job.retries,
               stage: "storage",
-              message: `dropped on restore — file missing: ${job.uri}`,
+              message: "dropped stale upload job on restore — local chunk file missing",
             };
             this.errors.unshift(record);
           }
@@ -509,6 +530,68 @@ class UploadQueue {
     });
   }
 
+  private async resolveChunkUri(job: ChunkUploadJob): Promise<string | null> {
+    const candidates = new Set<string>();
+    candidates.add(ensureFileUri(job.uri));
+
+    const stableSpoolUri = spoolUriForJob(job);
+    if (stableSpoolUri) {
+      candidates.add(stableSpoolUri);
+    }
+
+    if (FileSystem.documentDirectory) {
+      const path = withoutFileScheme(job.uri);
+      const documentsMarker = "/Documents/";
+      const documentsIndex = path.indexOf(documentsMarker);
+      if (documentsIndex >= 0) {
+        const relativeToDocuments = path.slice(
+          documentsIndex + documentsMarker.length
+        );
+        candidates.add(`${FileSystem.documentDirectory}${relativeToDocuments}`);
+      }
+
+      const spoolMarker = "/flex-chunks/";
+      const spoolIndex = path.indexOf(spoolMarker);
+      if (spoolIndex >= 0) {
+        const relativeToSpool = path.slice(spoolIndex + spoolMarker.length);
+        candidates.add(`${LOCAL_SPOOL_DIR}/${relativeToSpool}`);
+      }
+    }
+
+    for (const candidate of candidates) {
+      const info = await FileSystem.getInfoAsync(candidate).catch(() => null);
+      if (info?.exists) return candidate;
+    }
+
+    return null;
+  }
+
+  private async resolveChunkFile(
+    job: ChunkUploadJob
+  ): Promise<{ uri: string; path: string; sizeBytes: number | null } | null> {
+    const resolvedUri = await this.resolveChunkUri(job);
+    if (!resolvedUri) return null;
+
+    if (resolvedUri !== job.uri) {
+      this.recordRecorderEvent(
+        job.sessionId,
+        job.chunkIndex,
+        "rebased stale chunk path to current app container"
+      );
+      job.uri = resolvedUri;
+      await this.persist();
+    }
+
+    const info = await FileSystem.getInfoAsync(resolvedUri);
+    if (!info.exists) return null;
+
+    return {
+      uri: resolvedUri,
+      path: withoutFileScheme(resolvedUri),
+      sizeBytes: "size" in info && typeof info.size === "number" ? info.size : null,
+    };
+  }
+
   private async deleteLocalChunkFile(
     uriOrPath: string | null | undefined,
     sessionId: string,
@@ -650,9 +733,14 @@ class UploadQueue {
   ): Promise<void> {
     const msg = error instanceof Error ? error.message : "Unknown error";
     const stage: UploadErrorRecord["stage"] =
-      error instanceof UploadStageError ? error.stage : "unknown";
+      error instanceof UploadStageError
+        ? error.stage
+        : looksLikeMissingFileError(msg)
+          ? "storage"
+          : "unknown";
     const unrecoverable =
-      error instanceof UploadStageError && error.unrecoverable === true;
+      (error instanceof UploadStageError && error.unrecoverable === true) ||
+      looksLikeMissingFileError(msg);
     console.error(`Upload failed for chunk ${job.chunkIndex} [${stage}]: ${msg}`);
     this.lastError = `Chunk ${job.chunkIndex} [${stage}]: ${msg}`;
     if (!unrecoverable) {
@@ -681,6 +769,7 @@ class UploadQueue {
     if (unrecoverable || job.retries >= MAX_RETRIES) {
       this.queue = this.queue.filter((j) => j !== job);
       await this.persist();
+      this.checkSessionCompletes();
     } else {
       job.retries += 1;
       job.nativeTaskId = undefined;
@@ -704,12 +793,10 @@ class UploadQueue {
       throw new UploadStageError("auth", "No auth session");
     }
 
-    const info = await FileSystem.getInfoAsync(job.uri);
-    if (!info.exists) {
+    const localFile = await this.resolveChunkFile(job);
+    if (!localFile) {
       throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
     }
-    const fileSizeBytes =
-      "size" in info && typeof info.size === "number" ? info.size : null;
 
     const urlRes = await fetch(apiUrl("/api/sessions/chunk/upload-url"), {
       method: "POST",
@@ -734,12 +821,8 @@ class UploadQueue {
     const { signedUrl, storagePath }: { signedUrl: string; storagePath: string } =
       await urlRes.json();
 
-    // Strip file:// prefix if present — URLSession.uploadTaskWithRequest:fromFile
-    // wants a plain filesystem path.
-    const localPath = withoutFileScheme(job.uri);
-
     const { taskId } = await nativeBackgroundUploader.enqueueUpload(
-      localPath,
+      localFile.path,
       signedUrl,
       { "Content-Type": "audio/mp4" },
       {
@@ -749,9 +832,9 @@ class UploadQueue {
         latitude: job.latitude,
         longitude: job.longitude,
         storagePath,
-        localUri: job.uri,
-        localFilePath: localPath,
-        fileSizeBytes,
+        localUri: localFile.uri,
+        localFilePath: localFile.path,
+        fileSizeBytes: localFile.sizeBytes,
       }
     );
 
@@ -889,8 +972,8 @@ class UploadQueue {
 
     // Verify the chunk file still exists on disk before upload. If the OS
     // evicted it (rare but possible), this is an unrecoverable error — skip it.
-    const info = await FileSystem.getInfoAsync(job.uri);
-    if (!info.exists) {
+    const localFile = await this.resolveChunkFile(job);
+    if (!localFile) {
       throw new UploadStageError("storage", `chunk file missing: ${job.uri}`, true);
     }
 
@@ -900,7 +983,7 @@ class UploadQueue {
     const storagePath = `${job.sessionId}/${job.chunkIndex}.m4a`;
     const uploadUrl = `${SUPABASE_URL}/storage/v1/object/recording-chunks/${storagePath}`;
 
-    const uploadRes = await FileSystem.uploadAsync(uploadUrl, job.uri, {
+    const uploadRes = await FileSystem.uploadAsync(uploadUrl, localFile.uri, {
       httpMethod: "POST",
       uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
       headers: {
