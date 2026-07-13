@@ -226,9 +226,11 @@ export class OpenAIRealtimeService {
         return;
       case "response.created":
       case "response.audio.delta":
+      case "response.output_audio.delta":
         this.callbacks.onAgentSpeaking(true);
         return;
       case "response.audio.done":
+      case "response.output_audio.done":
       case "response.done":
       case "output_audio_buffer.stopped":
         this.callbacks.onAgentSpeaking(false);
@@ -238,13 +240,17 @@ export class OpenAIRealtimeService {
         this.emitTranscript("rep", event.transcript);
         return;
       case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
         this.appendAssistantTranscript(event.response_id ?? event.item_id ?? "latest", event.delta);
         return;
       case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
         this.appendAssistantTranscript(event.response_id ?? event.item_id ?? "latest", event.transcript);
         this.flushAssistantTranscript(event.response_id ?? event.item_id ?? "latest");
         return;
       case "conversation.item.created":
+      case "conversation.item.added":
+      case "conversation.item.done":
         this.handleConversationItem(event);
         return;
       default:

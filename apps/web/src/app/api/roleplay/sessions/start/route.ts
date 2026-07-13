@@ -160,7 +160,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "OpenAI Realtime not configured: OPENAI_API_KEY missing" }, { status: 500 });
   }
 
-  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime";
+  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1";
   const voice = pickOpenAIVoice(persona);
   const instructions = buildRealtimeInstructions(
     persona.system_prompt,
