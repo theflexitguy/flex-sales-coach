@@ -3,6 +3,7 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { createAdmin } from "@flex/supabase/admin";
 import { DAILY_ROLEPLAY_SESSION_LIMIT } from "@flex/shared";
 import { getRoleplayAccess } from "@/lib/roleplay-access";
+import { buildRoleplayGrounding } from "@/lib/roleplay-grounding";
 
 type OpenAIVoice = "cedar" | "marin" | "echo" | "sage" | "coral" | "shimmer";
 
@@ -57,7 +58,8 @@ function buildRealtimeInstructions(
   personaPrompt: string,
   contextPrompt: string,
   difficulty: RoleplayDifficulty,
-  targetObjections: readonly string[]
+  targetObjections: readonly string[],
+  grounding: string
 ): string {
   const scenarioBlock = contextPrompt
     ? `\n\n--- SCENARIO CONTEXT ---\n${contextPrompt}`
@@ -65,8 +67,9 @@ function buildRealtimeInstructions(
   const objectionBlock = targetObjections.length
     ? `\nTarget objections to raise naturally: ${targetObjections.join(", ")}.`
     : "";
+  const groundingBlock = grounding ? `\n\n${grounding}` : "";
 
-  return `${personaPrompt}${scenarioBlock}
+  return `${personaPrompt}${scenarioBlock}${groundingBlock}
 
 --- ROLEPLAY RULES ---
 You are the homeowner/customer in a door-to-door pest control sales practice.
@@ -74,6 +77,8 @@ Stay fully in character as the selected homeowner. Do not coach, score, explain 
 The sales rep must initiate the conversation. Stay silent until the user speaks first.
 Speak English only. Never speak Spanish or any other language, even if source transcript text, persona data, names, or scenario context suggest another language.
 Speak naturally with realistic hesitation, interruptions, short answers, and objections.
+At the door, default to one or two short sentences. Answer only what the rep actually asked. Do not volunteer your life story, summarize all of your concerns, explain why pest control might help you, or hand the rep an easy path forward.
+Reveal at most one useful personal or property detail at a time, and only after a specific, natural discovery question or earned rapport. Keep deeper concerns private until the rep uncovers them.
 Door-to-door is hard. The rep must build rapport, ask useful questions, pre-overcome concerns, explain value clearly, and earn the next step. Do not simply answer questions or agree because the rep sounds nice.
 ${difficultyRules(difficulty)}${objectionBlock}
 Push back when a real homeowner would push back. If the rep skips rapport, talks too much, fails to handle authority/spouse concerns, or gives a generic pitch, become shorter and harder to win back.
@@ -149,7 +154,7 @@ export async function POST(request: Request) {
   // Get persona
   const { data: persona } = await admin
     .from("roleplay_personas")
-    .select("id, name, description, personality, system_prompt, voice_id")
+    .select("id, name, description, personality, system_prompt, voice_id, source_call_ids")
     .eq("id", personaId)
     .single();
 
@@ -162,11 +167,18 @@ export async function POST(request: Request) {
 
   const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1";
   const voice = pickOpenAIVoice(persona);
+  const grounding = await buildRoleplayGrounding(admin, {
+    teamId: profile.team_id,
+    playbookRole: profile.playbook_role ?? "door_to_door_sales",
+    sourceCallIds: (persona.source_call_ids as string[] | null) ?? [],
+    targetObjections,
+  });
   const instructions = buildRealtimeInstructions(
     persona.system_prompt,
     contextPrompt,
     difficulty,
-    targetObjections
+    targetObjections,
+    grounding
   );
 
   const secretRes = await fetch("https://api.openai.com/v1/realtime/client_secrets", {

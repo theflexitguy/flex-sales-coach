@@ -4,6 +4,7 @@ type ProfileForRoleplayAccess = {
   id: string;
   team_id: string | null;
   role: string | null;
+  playbook_role: string | null;
 };
 
 export type RoleplayAccessResult = {
@@ -17,7 +18,7 @@ export async function getRoleplayAccess(
 ): Promise<RoleplayAccessResult> {
   const { data: profile } = await admin
     .from("profiles")
-    .select("id, team_id, role")
+    .select("id, team_id, role, playbook_role")
     .eq("id", userId)
     .single();
 

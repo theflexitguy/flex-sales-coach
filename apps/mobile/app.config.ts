@@ -35,7 +35,7 @@ const config: ExpoConfig = {
         "Koachr uses background location only during active recordings to separate visits when you walk between homes.",
       ITSAppUsesNonExemptEncryption: false,
     },
-    buildNumber: "44",
+    buildNumber: "45",
   },
   android: {
     adaptiveIcon: {
@@ -82,6 +82,9 @@ const config: ExpoConfig = {
     // JS setInterval gets throttled hard. Prevents multi-hour sessions
     // from producing one giant chunk or losing chunks entirely.
     "./plugins/with-flex-chunk-recorder",
+    // Captures both sides of live roleplay sessions and mixes them into
+    // one reviewable M4A without changing the WebRTC conversation path.
+    "./plugins/with-flex-roleplay-recorder",
   ],
   extra: {
     router: {},

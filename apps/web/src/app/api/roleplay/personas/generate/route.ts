@@ -79,6 +79,9 @@ export async function POST(request: Request) {
       .map((u) => u.text);
     return { callId: t.call_id, lines: customerLines.slice(0, 20) }; // Cap per call
   });
+  const contributingCallIds = customerExcerpts
+    .filter((excerpt) => excerpt.lines.length > 0)
+    .map((excerpt) => excerpt.callId);
 
   // Also get objection data for richer context
   const { data: objections } = await admin
@@ -150,7 +153,7 @@ export async function POST(request: Request) {
         buyingSignals: p.personality.buying_signals,
       },
       voice_id: match[1].id,
-      source_call_ids: callIds.slice(0, 10),
+      source_call_ids: contributingCallIds.slice(0, 10),
       objection_categories: p.objection_categories,
       system_prompt: p.system_prompt,
     };

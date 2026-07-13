@@ -10,6 +10,7 @@ import { chunkManager } from "../services/recording/ChunkManager";
 import { locationTracker } from "../services/recording/LocationTracker";
 import { useRecordingStore } from "../stores/recording-store";
 import { UploadProgressBanner } from "../components/upload-progress-banner";
+import { drainPendingRoleplayAudio } from "../services/roleplay/RoleplayAudioUpload";
 
 export default function RootLayout() {
   const { session, loading, initialize } = useAuthStore();
@@ -30,6 +31,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (ready && session) {
       useRecordingStore.getState().recoverOrphanedSessions().catch(() => {});
+      drainPendingRoleplayAudio().catch(() => {});
     }
   }, [ready, session]);
 
@@ -46,6 +48,9 @@ export default function RootLayout() {
           .drainNativeFinalizedChunks()
           .finally(() => locationTracker.flushPendingNative())
           .finally(() => uploadQueue.restore());
+        if (useAuthStore.getState().session) {
+          drainPendingRoleplayAudio().catch(() => {});
+        }
       }
       appState.current = nextState;
     });

@@ -7,6 +7,8 @@ import {
   type StreamStatus,
   type VoiceProvider,
 } from "../services/roleplay/OpenAIRealtimeService";
+import { roleplayAudioRecorder } from "../services/roleplay/RoleplayAudioRecorder";
+import { uploadRoleplayAudio } from "../services/roleplay/RoleplayAudioUpload";
 
 export type RoleplayPhase = "idle" | "connecting" | "active" | "ending" | "completed" | "error";
 
@@ -55,6 +57,7 @@ export function useRoleplaySession() {
   const transcriptRef = useRef<readonly TranscriptLine[]>([]);
   const durationRef = useRef(0);
   const speakerEnabledRef = useRef(true);
+  const recordingActiveRef = useRef(false);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -131,6 +134,10 @@ export function useRoleplaySession() {
       setSessionId(data.sessionId);
       setPersonaName(data.personaName);
 
+      if (roleplayAudioRecorder.isAvailable()) {
+        recordingActiveRef.current = await roleplayAudioRecorder.start(data.sessionId).catch(() => false);
+      }
+
       // Create audio stream
       const stream = new OpenAIRealtimeService({
         onStatusChange: (status: StreamStatus) => {
@@ -143,6 +150,8 @@ export function useRoleplaySession() {
         },
         onError: (err) => {
           void disconnectStream();
+          roleplayAudioRecorder.cancel();
+          recordingActiveRef.current = false;
           setErrorMessage(err);
           setPhase("error");
         },
@@ -156,6 +165,8 @@ export function useRoleplaySession() {
       });
     } catch (err: unknown) {
       await disconnectStream();
+      roleplayAudioRecorder.cancel();
+      recordingActiveRef.current = false;
       setErrorMessage(err instanceof Error ? err.message : "Failed to start session");
       setPhase("error");
     }
@@ -166,17 +177,27 @@ export function useRoleplaySession() {
     if (!activeSessionId) return;
     setPhase("ending");
 
-    // Disconnect audio
+    const recordingPromise = recordingActiveRef.current
+      ? roleplayAudioRecorder.stop().catch(() => null)
+      : Promise.resolve(null);
+    recordingActiveRef.current = false;
     await disconnectStream();
 
     try {
-      const data = await apiPost<SessionResult>(
+      const endRequest = apiPost<SessionResult>(
         `/api/roleplay/sessions/${activeSessionId}/end`,
         {
           transcript: transcriptRef.current,
           durationSeconds: durationRef.current,
         }
       );
+      const recording = await recordingPromise;
+      const uploadRequest = recording
+        ? uploadRoleplayAudio(activeSessionId, recording.uri).catch((error) => {
+          console.error("roleplay audio upload failed", error);
+        })
+        : Promise.resolve();
+      const [data] = await Promise.all([endRequest, uploadRequest]);
       setResult(data);
       setPhase("completed");
     } catch (err: unknown) {
@@ -193,6 +214,8 @@ export function useRoleplaySession() {
 
   const reset = useCallback(() => {
     void disconnectStream();
+    roleplayAudioRecorder.cancel();
+    recordingActiveRef.current = false;
     setPhase("idle");
     setSessionId(null);
     setPersonaName("");
@@ -211,6 +234,7 @@ export function useRoleplaySession() {
       if (streamRef.current) {
         void streamRef.current.disconnect();
       }
+      roleplayAudioRecorder.cancel();
     };
   }, []);
 

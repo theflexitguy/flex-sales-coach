@@ -15,6 +15,16 @@ type TranscriptUtterance = {
   endMs?: unknown;
 };
 
+function getRelatedRow(value: unknown): AnalysisRow | null {
+  if (Array.isArray(value)) {
+    return (value[0] as AnalysisRow | undefined) ?? null;
+  }
+  if (value && typeof value === "object") {
+    return value as AnalysisRow;
+  }
+  return null;
+}
+
 function mapAnalysis(row: AnalysisRow | null) {
   if (!row) return null;
 
@@ -73,7 +83,7 @@ export async function GET(request: Request) {
 
     if (!session) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    const analysisRow = (session.roleplay_analyses as Array<Record<string, unknown>>)?.[0] ?? null;
+    const analysisRow = getRelatedRow(session.roleplay_analyses);
     const shouldTriggerAnalysis = recoverAnalysis && !analysisRow && session.status === "completed" && !!session.transcript_text;
 
     if (shouldTriggerAnalysis) {
@@ -134,7 +144,7 @@ export async function GET(request: Request) {
     .limit(20);
 
   const history = (sessions ?? []).map((s) => {
-    const analysis = (s.roleplay_analyses as Array<Record<string, unknown>>)?.[0] ?? null;
+    const analysis = getRelatedRow(s.roleplay_analyses);
     const persona = s.roleplay_personas as unknown as Record<string, unknown> | null;
     const scenario = s.roleplay_scenarios as unknown as Record<string, unknown> | null;
 

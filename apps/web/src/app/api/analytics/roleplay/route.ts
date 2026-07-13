@@ -2,6 +2,14 @@ import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-auth-server";
 import { createAdmin } from "@flex/supabase/admin";
 
+function getScore(value: unknown): { overall_score: number } | null {
+  const row = Array.isArray(value) ? value[0] : value;
+  if (!row || typeof row !== "object" || typeof (row as { overall_score?: unknown }).overall_score !== "number") {
+    return null;
+  }
+  return row as { overall_score: number };
+}
+
 export async function GET(request: Request) {
   const auth = await requireApiAuth(request);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -20,8 +28,6 @@ export async function GET(request: Request) {
     .eq("team_id", teamId)
     .eq("role", "rep")
     .eq("is_active", true);
-
-  const repIds = (reps ?? []).map((r) => r.id);
 
   // Get all completed roleplay sessions for the team
   const { data: sessions } = await admin
@@ -45,8 +51,8 @@ export async function GET(request: Request) {
   const repStats = (reps ?? []).map((rep) => {
     const repSessions = (sessions ?? []).filter((s) => s.rep_id === rep.id);
     const repAnalyses = repSessions
-      .map((s) => (s.roleplay_analyses as unknown as Array<{ overall_score: number }>)?.[0])
-      .filter(Boolean);
+      .map((s) => getScore(s.roleplay_analyses))
+      .filter((analysis): analysis is { overall_score: number } => analysis != null);
 
     const totalSessions = repSessions.length;
     const totalMinutes = Math.round(
@@ -63,8 +69,8 @@ export async function GET(request: Request) {
     // Real call avg for comparison
     const repRealCalls = (realCalls ?? []).filter((c) => c.rep_id === rep.id);
     const realAnalyses = repRealCalls
-      .map((c) => (c.call_analyses as unknown as Array<{ overall_score: number }>)?.[0])
-      .filter(Boolean);
+      .map((c) => getScore(c.call_analyses))
+      .filter((analysis): analysis is { overall_score: number } => analysis != null);
     const avgRealScore = realAnalyses.length > 0
       ? Math.round(realAnalyses.reduce((sum, a) => sum + a.overall_score, 0) / realAnalyses.length)
       : null;
